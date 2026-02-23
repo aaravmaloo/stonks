@@ -1,0 +1,12 @@
+bin/
+dist/
+tmp/
+*.exe
+*.out
+*.log
+
+.env
+.env.*
+
+# local cli artifacts
+.stk/

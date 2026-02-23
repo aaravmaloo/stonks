@@ -23,8 +23,17 @@ type CLIConfig struct {
 }
 
 func LoadAPIFromEnv() (APIConfig, error) {
+	addr := os.Getenv("PORT")
+	if addr != "" {
+		if !strings.HasPrefix(addr, ":") {
+			addr = ":" + addr
+		}
+	} else {
+		addr = envDefault("STANKS_API_ADDR", ":8080")
+	}
+
 	cfg := APIConfig{
-		Addr:              envDefault("STANKS_API_ADDR", ":8080"),
+		Addr:              addr,
 		DatabaseURL:       strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		SupabaseURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("SUPABASE_URL")), "/"),
 		SupabaseAnonKey:   strings.TrimSpace(os.Getenv("SUPABASE_ANON_KEY")),

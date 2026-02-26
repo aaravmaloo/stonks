@@ -396,7 +396,8 @@ func (s *Service) PlaceOrder(ctx context.Context, in OrderInput) (OrderResult, e
 			case "buy":
 				nextBalance := balance - notional - fee
 				if nextBalance < -debtLimit {
-					return ErrInsufficientFunds
+					maxUnits, maxNotional, maxFee := maxAffordableBuy(out.PriceMicros, balance, debtLimit)
+					return fmt.Errorf("%w: max buy %.4f shares (notional %.2f + fee %.2f stonky)", ErrInsufficientFunds, UnitsToShares(maxUnits), MicrosToStonky(maxNotional), MicrosToStonky(maxFee))
 				}
 				if err := upsertBuyPosition(ctx, tx, in.UserID, in.SeasonID, stockID, in.QuantityUnits, out.PriceMicros); err != nil {
 					return err
@@ -1240,6 +1241,37 @@ func normalish(seed float64) float64 {
 func isSerializationError(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "40001"
+}
+
+func maxAffordableBuy(priceMicros, balanceMicros, debtLimitMicros int64) (maxUnits, maxNotional, maxFee int64) {
+	if priceMicros <= 0 {
+		return 0, 0, 0
+	}
+	budget := balanceMicros + debtLimitMicros
+	if budget <= 0 {
+		return 0, 0, 0
+	}
+	hi := (budget * ShareScale) / priceMicros
+	lo := int64(0)
+	best := int64(0)
+	for lo <= hi {
+		mid := lo + (hi-lo)/2
+		notional, err := notionalMicros(priceMicros, mid)
+		if err != nil {
+			hi = mid - 1
+			continue
+		}
+		fee := int64(math.Round(float64(notional) * 0.0015))
+		if notional+fee <= budget {
+			best = mid
+			lo = mid + 1
+			maxNotional = notional
+			maxFee = fee
+			continue
+		}
+		hi = mid - 1
+	}
+	return best, maxNotional, maxFee
 }
 
 func volatilityParams(mode string) (noiseScale, shockProb, shockScale, capAbs float64) {

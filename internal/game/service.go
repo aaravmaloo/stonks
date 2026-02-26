@@ -368,6 +368,9 @@ func (s *Service) PlaceOrder(ctx context.Context, in OrderInput) (OrderResult, e
 				WHERE season_id = $1 AND symbol = $2
 				FOR UPDATE
 			`, in.SeasonID, in.Symbol).Scan(&stockID, &out.PriceMicros, &listed); err != nil {
+				if err == pgx.ErrNoRows {
+					return ErrStockNotFound
+				}
 				return err
 			}
 			if !listed {

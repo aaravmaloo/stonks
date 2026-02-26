@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -20,13 +19,12 @@ import (
 
 func main() {
 	cfg := config.LoadCLIFromEnv()
-	var apiBase string
+	apiBase := cfg.APIBaseURL
 
 	root := &cobra.Command{
 		Use:   "stk",
 		Short: "Stanks CLI game client",
 	}
-	root.PersistentFlags().StringVar(&apiBase, "api", cfg.APIBaseURL, "stanks api base url")
 
 	root.AddCommand(
 		newSignupCmd(&apiBase),
@@ -51,14 +49,23 @@ func newClient(apiBase *string) *cl.Client {
 }
 
 func newSignupCmd(apiBase *string) *cobra.Command {
-	var email, password, username string
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "signup",
-		Short: "Create a Stanks account (required before playing)",
+		Short: "Create a Stanks account",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if email == "" || password == "" {
-				return fmt.Errorf("--email and --password are required")
+			email, err := promptRequired("Email")
+			if err != nil {
+				return err
 			}
+			password, err := promptRequired("Password")
+			if err != nil {
+				return err
+			}
+			username, err := promptOptional("Username (optional)")
+			if err != nil {
+				return err
+			}
+
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
 			client := newClient(apiBase)
@@ -67,7 +74,7 @@ func newSignupCmd(apiBase *string) *cobra.Command {
 				return err
 			}
 			if strings.TrimSpace(session.AccessToken) == "" {
-				fmt.Println("signup created. verify your email, then run: stk login")
+				printWarn("Signup created. Verify email, then run `stk login`.")
 				return nil
 			}
 			if err := cl.SaveSession(cl.Session{
@@ -78,24 +85,24 @@ func newSignupCmd(apiBase *string) *cobra.Command {
 			}); err != nil {
 				return err
 			}
-			fmt.Println("signup complete and session saved")
+			printSuccess("Signup complete. Session saved.")
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&email, "email", "", "email")
-	cmd.Flags().StringVar(&password, "password", "", "password")
-	cmd.Flags().StringVar(&username, "username", "", "username")
-	return cmd
 }
 
 func newLoginCmd(apiBase *string) *cobra.Command {
-	var email, password string
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "login",
 		Short: "Login to Stanks",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if email == "" || password == "" {
-				return fmt.Errorf("--email and --password are required")
+			email, err := promptRequired("Email")
+			if err != nil {
+				return err
+			}
+			password, err := promptRequired("Password")
+			if err != nil {
+				return err
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
@@ -112,13 +119,10 @@ func newLoginCmd(apiBase *string) *cobra.Command {
 			}); err != nil {
 				return err
 			}
-			fmt.Println("login successful")
+			printSuccess("Login successful.")
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&email, "email", "", "email")
-	cmd.Flags().StringVar(&password, "password", "", "password")
-	return cmd
 }
 
 func newLogoutCmd() *cobra.Command {
@@ -129,7 +133,7 @@ func newLogoutCmd() *cobra.Command {
 			if err := cl.ClearSession(); err != nil {
 				return err
 			}
-			fmt.Println("logged out")
+			printSuccess("Logged out.")
 			return nil
 		},
 	}
@@ -151,8 +155,7 @@ func newDashCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printJSON(out)
-			return nil
+			return renderDashboard(out)
 		},
 	}
 }
@@ -171,7 +174,7 @@ func newSyncCmd(apiBase *string) *cobra.Command {
 				return err
 			}
 			if len(queue) == 0 {
-				fmt.Println("sync queue is empty")
+				printInfo("Sync queue is empty.")
 				return nil
 			}
 			client := newClient(apiBase)
@@ -184,7 +187,7 @@ func newSyncCmd(apiBase *string) *cobra.Command {
 				_, err := client.Do(ctx, q.Method, q.Path, sess.AccessToken, q.Body, q.IdempotencyKey)
 				if err != nil {
 					remaining = append(remaining, q)
-					fmt.Fprintf(os.Stderr, "sync failed for %s %s: %v\n", q.Method, q.Path, err)
+					printError(fmt.Sprintf("Sync failed for %s %s: %v", q.Method, q.Path, err))
 					continue
 				}
 				success++
@@ -192,7 +195,7 @@ func newSyncCmd(apiBase *string) *cobra.Command {
 			if err := syncq.Save(remaining); err != nil {
 				return err
 			}
-			fmt.Printf("sync complete: replayed=%d remaining=%d\n", success, len(remaining))
+			printSuccess(fmt.Sprintf("Sync complete: replayed=%d remaining=%d", success, len(remaining)))
 			return nil
 		},
 	}
@@ -218,6 +221,7 @@ func newStocksListCmd(apiBase *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list [all|SYMBOL]",
 		Short: "List stocks or inspect one stock",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sess, err := cl.LoadSession()
 			if err != nil {
@@ -228,57 +232,97 @@ func newStocksListCmd(apiBase *string) *cobra.Command {
 			client := newClient(apiBase)
 
 			if len(args) == 0 {
-				out, err := client.ListStocks(ctx, sess.AccessToken, false)
+				choice, err := promptChoice("View", []string{"market", "all", "symbol"}, "market")
 				if err != nil {
 					return err
 				}
-				printJSON(out)
-				return nil
+				switch choice {
+				case "market":
+					out, err := client.ListStocks(ctx, sess.AccessToken, false)
+					if err != nil {
+						return err
+					}
+					return renderStocksList(out)
+				case "all":
+					out, err := client.ListStocks(ctx, sess.AccessToken, true)
+					if err != nil {
+						return err
+					}
+					return renderStocksList(out)
+				default:
+					symbol, err := promptSymbol("Symbol")
+					if err != nil {
+						return err
+					}
+					out, err := client.StockDetail(ctx, sess.AccessToken, symbol)
+					if err != nil {
+						return err
+					}
+					return renderStockDetail(out)
+				}
 			}
+
 			arg := strings.ToUpper(strings.TrimSpace(args[0]))
 			if arg == "ALL" {
 				out, err := client.ListStocks(ctx, sess.AccessToken, true)
 				if err != nil {
 					return err
 				}
-				printJSON(out)
-				return nil
+				return renderStocksList(out)
+			}
+			if arg == "MARKET" {
+				out, err := client.ListStocks(ctx, sess.AccessToken, false)
+				if err != nil {
+					return err
+				}
+				return renderStocksList(out)
 			}
 			out, err := client.StockDetail(ctx, sess.AccessToken, arg)
 			if err != nil {
 				return err
 			}
-			printJSON(out)
-			return nil
+			return renderStockDetail(out)
 		},
 	}
 }
 
 func newStocksBuyCmd(apiBase *string) *cobra.Command {
-	var qty float64
 	cmd := &cobra.Command{
-		Use:   "buy <symbol>",
+		Use:   "buy [symbol]",
 		Short: "Buy shares",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return placeOrderCommand(cmd, apiBase, "buy", args[0], qty)
+			symbol, err := symbolFromArgsOrPrompt(args)
+			if err != nil {
+				return err
+			}
+			qty, err := promptFloat("Shares to buy", 0)
+			if err != nil {
+				return err
+			}
+			return placeOrderCommand(cmd, apiBase, "buy", symbol, qty)
 		},
 	}
-	cmd.Flags().Float64Var(&qty, "qty", 1.0, "share quantity")
 	return cmd
 }
 
 func newStocksSellCmd(apiBase *string) *cobra.Command {
-	var qty float64
 	cmd := &cobra.Command{
-		Use:   "sell <symbol>",
+		Use:   "sell [symbol]",
 		Short: "Sell shares",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return placeOrderCommand(cmd, apiBase, "sell", args[0], qty)
+			symbol, err := symbolFromArgsOrPrompt(args)
+			if err != nil {
+				return err
+			}
+			qty, err := promptFloat("Shares to sell", 0)
+			if err != nil {
+				return err
+			}
+			return placeOrderCommand(cmd, apiBase, "sell", symbol, qty)
 		},
 	}
-	cmd.Flags().Float64Var(&qty, "qty", 1.0, "share quantity")
 	return cmd
 }
 
@@ -311,35 +355,41 @@ func placeOrderCommand(cmd *cobra.Command, apiBase *string, side, symbol string,
 			IdempotencyKey: idem,
 		})
 	}
-	printJSON(out)
-	return nil
+	return renderOrderResult(out, side, symbol, qty)
 }
 
 func newStocksCreateCmd(apiBase *string) *cobra.Command {
-	var name string
-	var businessID int64
 	cmd := &cobra.Command{
-		Use:   "create <symbol>",
+		Use:   "create [symbol]",
 		Short: "Create your own stock for one of your businesses",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sess, err := cl.LoadSession()
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			if name == "" || businessID <= 0 {
-				return fmt.Errorf("--name and --business are required")
+			symbol, err := symbolFromArgsOrPrompt(args)
+			if err != nil {
+				return err
+			}
+			name, err := promptRequired("Display name")
+			if err != nil {
+				return err
+			}
+			businessID, err := promptInt64("Business ID", 1)
+			if err != nil {
+				return err
 			}
 			idem := uuid.NewString()
 			body := map[string]any{
-				"symbol":       strings.ToUpper(strings.TrimSpace(args[0])),
+				"symbol":       symbol,
 				"display_name": name,
 				"business_id":  businessID,
 			}
 			client := newClient(apiBase)
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			out, err := client.CreateStock(ctx, sess.AccessToken, body["symbol"].(string), name, businessID, idem)
+			out, err := client.CreateStock(ctx, sess.AccessToken, symbol, name, businessID, idem)
 			if err != nil {
 				return queueOnNetworkError(err, syncq.Command{
 					Method:         "POST",
@@ -348,30 +398,30 @@ func newStocksCreateCmd(apiBase *string) *cobra.Command {
 					IdempotencyKey: idem,
 				})
 			}
-			printJSON(out)
-			return nil
+			return renderSimpleOK(out, fmt.Sprintf("Created custom stock %s.", symbol))
 		},
 	}
-	cmd.Flags().StringVar(&name, "name", "", "display name")
-	cmd.Flags().Int64Var(&businessID, "business", 0, "business id")
 	return cmd
 }
 
 func newStocksIPOCmd(apiBase *string) *cobra.Command {
-	var price float64
 	cmd := &cobra.Command{
-		Use:   "ipo <symbol>",
+		Use:   "ipo [symbol]",
 		Short: "List a created stock publicly",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sess, err := cl.LoadSession()
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			if price <= 0 {
-				return fmt.Errorf("--price must be > 0")
+			symbol, err := symbolFromArgsOrPrompt(args)
+			if err != nil {
+				return err
 			}
-			symbol := strings.ToUpper(strings.TrimSpace(args[0]))
+			price, err := promptFloat("IPO price (stonky)", 0)
+			if err != nil {
+				return err
+			}
 			priceMicros := game.StonkyToMicros(price)
 			idem := uuid.NewString()
 			body := map[string]any{"price_micros": priceMicros}
@@ -388,11 +438,9 @@ func newStocksIPOCmd(apiBase *string) *cobra.Command {
 					IdempotencyKey: idem,
 				})
 			}
-			printJSON(out)
-			return nil
+			return renderSimpleOK(out, fmt.Sprintf("IPO opened for %s at %s stonky.", symbol, formatMicros(priceMicros)))
 		},
 	}
-	cmd.Flags().Float64Var(&price, "price", 0, "ipo price in stonky")
 	return cmd
 }
 
@@ -411,17 +459,29 @@ func newBusinessCmd(apiBase *string) *cobra.Command {
 }
 
 func newBusinessCreateCmd(apiBase *string) *cobra.Command {
-	var visibility string
 	cmd := &cobra.Command{
-		Use:   "create <name>",
+		Use:   "create [name]",
 		Short: "Create a business (requires progression)",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sess, err := cl.LoadSession()
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			name := strings.TrimSpace(args[0])
+			name := ""
+			if len(args) > 0 {
+				name = strings.TrimSpace(args[0])
+			} else {
+				name, err = promptRequired("Business name")
+				if err != nil {
+					return err
+				}
+			}
+			visibility, err := promptChoice("Visibility", []string{"private", "public"}, "private")
+			if err != nil {
+				return err
+			}
+
 			idem := uuid.NewString()
 			body := map[string]any{"name": name, "visibility": visibility}
 			client := newClient(apiBase)
@@ -436,27 +496,25 @@ func newBusinessCreateCmd(apiBase *string) *cobra.Command {
 					IdempotencyKey: idem,
 				})
 			}
-			printJSON(out)
-			return nil
+			return renderBusinessCreated(out, name, visibility)
 		},
 	}
-	cmd.Flags().StringVar(&visibility, "visibility", "private", "private|public")
 	return cmd
 }
 
 func newBusinessStateCmd(apiBase *string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "state <business_id>",
+		Use:   "state [business_id]",
 		Short: "Show business state",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sess, err := cl.LoadSession()
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			id, err := strconv.ParseInt(args[0], 10, 64)
+			id, err := int64FromArgOrPrompt(args, 0, "Business ID")
 			if err != nil {
-				return fmt.Errorf("invalid business id")
+				return err
 			}
 			client := newClient(apiBase)
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
@@ -465,27 +523,36 @@ func newBusinessStateCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printJSON(out)
-			return nil
+			return renderBusinessState(out)
 		},
 	}
 }
 
 func newBusinessVisibilityCmd(apiBase *string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "visibility <business_id> <private|public>",
+		Use:   "visibility [business_id] [private|public]",
 		Short: "Set business visibility",
-		Args:  cobra.ExactArgs(2),
+		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sess, err := cl.LoadSession()
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			id, err := strconv.ParseInt(args[0], 10, 64)
+			id, err := int64FromArgOrPrompt(args, 0, "Business ID")
 			if err != nil {
-				return fmt.Errorf("invalid business id")
+				return err
 			}
-			visibility := strings.ToLower(strings.TrimSpace(args[1]))
+
+			var visibility string
+			if len(args) >= 2 {
+				visibility = strings.ToLower(strings.TrimSpace(args[1]))
+			} else {
+				visibility, err = promptChoice("Visibility", []string{"private", "public"}, "private")
+				if err != nil {
+					return err
+				}
+			}
+
 			idem := uuid.NewString()
 			body := map[string]any{"visibility": visibility}
 			path := fmt.Sprintf("/v1/businesses/%d/visibility", id)
@@ -501,42 +568,45 @@ func newBusinessVisibilityCmd(apiBase *string) *cobra.Command {
 					IdempotencyKey: idem,
 				})
 			}
-			printJSON(out)
-			return nil
+			return renderSimpleOK(out, fmt.Sprintf("Business %d visibility set to %s.", id, visibility))
 		},
 	}
 }
 
 func newBusinessIPOCmd(apiBase *string) *cobra.Command {
-	var symbol string
-	var price float64
 	cmd := &cobra.Command{
-		Use:   "ipo <business_id>",
+		Use:   "ipo [business_id]",
 		Short: "List a public business on market",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sess, err := cl.LoadSession()
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			id, err := strconv.ParseInt(args[0], 10, 64)
+			id, err := int64FromArgOrPrompt(args, 0, "Business ID")
 			if err != nil {
-				return fmt.Errorf("invalid business id")
+				return err
 			}
-			if symbol == "" || price <= 0 {
-				return fmt.Errorf("--symbol and --price are required")
+			symbol, err := promptSymbol("Stock symbol")
+			if err != nil {
+				return err
 			}
+			price, err := promptFloat("IPO price (stonky)", 0)
+			if err != nil {
+				return err
+			}
+
 			idem := uuid.NewString()
 			priceMicros := game.StonkyToMicros(price)
 			body := map[string]any{
-				"symbol":       strings.ToUpper(strings.TrimSpace(symbol)),
+				"symbol":       symbol,
 				"price_micros": priceMicros,
 			}
 			path := fmt.Sprintf("/v1/businesses/%d/ipo", id)
 			client := newClient(apiBase)
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			out, err := client.BusinessIPO(ctx, sess.AccessToken, id, body["symbol"].(string), priceMicros, idem)
+			out, err := client.BusinessIPO(ctx, sess.AccessToken, id, symbol, priceMicros, idem)
 			if err != nil {
 				return queueOnNetworkError(err, syncq.Command{
 					Method:         "POST",
@@ -545,12 +615,9 @@ func newBusinessIPOCmd(apiBase *string) *cobra.Command {
 					IdempotencyKey: idem,
 				})
 			}
-			printJSON(out)
-			return nil
+			return renderSimpleOK(out, fmt.Sprintf("Business %d IPO opened as %s at %s stonky.", id, symbol, formatMicros(priceMicros)))
 		},
 	}
-	cmd.Flags().StringVar(&symbol, "symbol", "", "6-char stock symbol")
-	cmd.Flags().Float64Var(&price, "price", 0, "ipo price in stonky")
 	return cmd
 }
 
@@ -560,17 +627,17 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 		Short: "Employee operations",
 	}
 	employees.AddCommand(&cobra.Command{
-		Use:   "list <business_id>",
+		Use:   "list [business_id]",
 		Short: "List employees hired by your business",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sess, err := cl.LoadSession()
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			businessID, err := strconv.ParseInt(args[0], 10, 64)
+			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
 			if err != nil {
-				return fmt.Errorf("invalid business id")
+				return err
 			}
 			client := newClient(apiBase)
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
@@ -579,8 +646,7 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printJSON(out)
-			return nil
+			return renderBusinessEmployees(out, businessID)
 		},
 	})
 	employees.AddCommand(&cobra.Command{
@@ -598,26 +664,25 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printJSON(out)
-			return nil
+			return renderEmployeeCandidates(out)
 		},
 	})
 	employees.AddCommand(&cobra.Command{
-		Use:   "hire <business_id> <candidate_id>",
+		Use:   "hire [business_id] [candidate_id]",
 		Short: "Hire a candidate for your business",
-		Args:  cobra.ExactArgs(2),
+		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sess, err := cl.LoadSession()
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			businessID, err := strconv.ParseInt(args[0], 10, 64)
+			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
 			if err != nil {
-				return fmt.Errorf("invalid business id")
+				return err
 			}
-			candidateID, err := strconv.ParseInt(args[1], 10, 64)
+			candidateID, err := int64FromArgOrPrompt(args, 1, "Candidate ID")
 			if err != nil {
-				return fmt.Errorf("invalid candidate id")
+				return err
 			}
 			idem := uuid.NewString()
 			body := map[string]any{"candidate_id": candidateID}
@@ -634,8 +699,7 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 					IdempotencyKey: idem,
 				})
 			}
-			printJSON(out)
-			return nil
+			return renderSimpleOK(out, fmt.Sprintf("Hired candidate %d for business %d.", candidateID, businessID))
 		},
 	})
 	return employees
@@ -661,8 +725,7 @@ func newLeaderboardCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printJSON(out)
-			return nil
+			return renderLeaderboard(out, "Global Leaderboard")
 		},
 	})
 	lb.AddCommand(&cobra.Command{
@@ -680,8 +743,7 @@ func newLeaderboardCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printJSON(out)
-			return nil
+			return renderLeaderboard(out, "Friends Leaderboard")
 		},
 	})
 	return lb
@@ -693,16 +755,19 @@ func newFriendsCmd(apiBase *string) *cobra.Command {
 		Short: "Manage friends by invite code",
 	}
 	friends.AddCommand(&cobra.Command{
-		Use:   "add <invite_code>",
+		Use:   "add [invite_code]",
 		Short: "Follow a user using invite code",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sess, err := cl.LoadSession()
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
+			code, err := inviteCodeFromArgsOrPrompt(args)
+			if err != nil {
+				return err
+			}
 			idem := uuid.NewString()
-			code := strings.ToUpper(strings.TrimSpace(args[0]))
 			body := map[string]any{"invite_code": code}
 			client := newClient(apiBase)
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
@@ -716,20 +781,22 @@ func newFriendsCmd(apiBase *string) *cobra.Command {
 					IdempotencyKey: idem,
 				})
 			}
-			printJSON(out)
-			return nil
+			return renderSimpleOK(out, fmt.Sprintf("Now following invite code %s.", code))
 		},
 	})
 	friends.AddCommand(&cobra.Command{
-		Use:   "remove <invite_code>",
+		Use:   "remove [invite_code]",
 		Short: "Unfollow a user using invite code",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sess, err := cl.LoadSession()
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			code := strings.ToUpper(strings.TrimSpace(args[0]))
+			code, err := inviteCodeFromArgsOrPrompt(args)
+			if err != nil {
+				return err
+			}
 			client := newClient(apiBase)
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
@@ -737,8 +804,7 @@ func newFriendsCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printJSON(out)
-			return nil
+			return renderSimpleOK(out, fmt.Sprintf("Stopped following invite code %s.", code))
 		},
 	})
 	return friends
@@ -754,7 +820,7 @@ func queueOnNetworkError(err error, entry syncq.Command) error {
 	if pushErr := syncq.Push(entry); pushErr != nil {
 		return fmt.Errorf("request failed (%v) and queue write failed (%v)", err, pushErr)
 	}
-	fmt.Fprintf(os.Stderr, "request failed (%v), queued locally for `stk sync`\n", err)
+	printWarn(fmt.Sprintf("Request failed (%v). Queued locally for `stk sync`.", err))
 	return nil
 }
 
@@ -765,11 +831,35 @@ func isAPIStructuredError(err error) bool {
 	return strings.Contains(err.Error(), "api status")
 }
 
-func printJSON(v any) {
-	raw, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		fmt.Println(v)
-		return
+func symbolFromArgsOrPrompt(args []string) (string, error) {
+	if len(args) > 0 {
+		symbol := strings.ToUpper(strings.TrimSpace(args[0]))
+		if err := game.ValidateSymbol(symbol); err != nil {
+			return "", err
+		}
+		return symbol, nil
 	}
-	fmt.Println(string(raw))
+	return promptSymbol("Symbol")
+}
+
+func inviteCodeFromArgsOrPrompt(args []string) (string, error) {
+	if len(args) > 0 {
+		return strings.ToUpper(strings.TrimSpace(args[0])), nil
+	}
+	code, err := promptRequired("Invite code")
+	if err != nil {
+		return "", err
+	}
+	return strings.ToUpper(strings.TrimSpace(code)), nil
+}
+
+func int64FromArgOrPrompt(args []string, idx int, label string) (int64, error) {
+	if len(args) > idx {
+		v, err := strconv.ParseInt(strings.TrimSpace(args[idx]), 10, 64)
+		if err != nil || v <= 0 {
+			return 0, fmt.Errorf("invalid %s", strings.ToLower(label))
+		}
+		return v, nil
+	}
+	return promptInt64(label, 1)
 }

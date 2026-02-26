@@ -14,6 +14,7 @@ type APIConfig struct {
 	SupabaseURL       string
 	SupabaseAnonKey   string
 	MarketTickEvery   time.Duration
+	MarketVolatility  string
 	InterestAPR       float64
 	StartupSeedStocks bool
 }
@@ -38,6 +39,7 @@ func LoadAPIFromEnv() (APIConfig, error) {
 		SupabaseURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("SUPABASE_URL")), "/"),
 		SupabaseAnonKey:   strings.TrimSpace(os.Getenv("SUPABASE_ANON_KEY")),
 		MarketTickEvery:   envDurationDefault("STANKS_MARKET_TICK_EVERY", 5*time.Minute),
+		MarketVolatility:  envVolatilityDefault(),
 		InterestAPR:       envFloatDefault("STANKS_INTEREST_APR", 0.18),
 		StartupSeedStocks: envBoolDefault("STANKS_STARTUP_SEED_STOCKS", true),
 	}
@@ -101,4 +103,17 @@ func envBoolDefault(key string, fallback bool) bool {
 		return fallback
 	}
 	return b
+}
+
+func envVolatilityDefault() string {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("VOLATILITY")))
+	if v == "" {
+		v = strings.ToLower(strings.TrimSpace(os.Getenv("STANKS_MARKET_VOLATILITY")))
+	}
+	switch v {
+	case "calm", "mor", "wild":
+		return v
+	default:
+		return "mor"
+	}
 }

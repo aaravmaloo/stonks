@@ -1027,7 +1027,7 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 	rows, err := tx.Query(ctx, `
 		SELECT id, current_price_micros, anchor_price_micros
 		FROM game.stocks
-		WHERE season_id = $1 AND listed_public = true
+		WHERE season_id = $1
 		FOR UPDATE
 	`, seasonID)
 	if err != nil {

@@ -31,7 +31,6 @@ func main() {
 		newLoginCmd(&apiBase),
 		newLogoutCmd(),
 		newDashCmd(&apiBase),
-		newSyncCmd(&apiBase),
 		newStocksCmd(&apiBase),
 		newBusinessCmd(&apiBase),
 		newLeaderboardCmd(&apiBase),
@@ -810,18 +809,14 @@ func newFriendsCmd(apiBase *string) *cobra.Command {
 	return friends
 }
 
-func queueOnNetworkError(err error, entry syncq.Command) error {
+func queueOnNetworkError(err error, _ syncq.Command) error {
 	if err == nil {
 		return nil
 	}
 	if isAPIStructuredError(err) {
 		return err
 	}
-	if pushErr := syncq.Push(entry); pushErr != nil {
-		return fmt.Errorf("request failed (%v) and queue write failed (%v)", err, pushErr)
-	}
-	printWarn(fmt.Sprintf("Request failed (%v). Queued locally for `stk sync`.", err))
-	return nil
+	return fmt.Errorf("request failed (offline queue removed): %w", err)
 }
 
 func isAPIStructuredError(err error) bool {

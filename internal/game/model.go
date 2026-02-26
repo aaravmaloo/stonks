@@ -28,6 +28,7 @@ var (
 	ErrInsufficientShares   = errors.New("insufficient shares")
 	ErrBusinessLocked       = errors.New("business feature locked: net worth below requirement")
 	ErrUnauthorized         = errors.New("unauthorized")
+	ErrTxConflict           = errors.New("transaction conflict: please retry")
 )
 
 var symbolRE = regexp.MustCompile(`^[A-Z]{6}$`)

@@ -348,7 +348,9 @@ func (s *Service) PlaceOrder(ctx context.Context, in OrderInput) (OrderResult, e
 		return out, fmt.Errorf("side must be buy or sell")
 	}
 
-	for attempt := 0; attempt < 4; attempt++ {
+	const maxAttempts = 8
+	retryDelay := 75 * time.Millisecond
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 		if err != nil {
 			return out, err
@@ -444,13 +446,21 @@ func (s *Service) PlaceOrder(ctx context.Context, in OrderInput) (OrderResult, e
 		if err == nil {
 			return out, nil
 		}
-		if !isSerializationError(err) || attempt == 3 {
+		if !isSerializationError(err) {
 			return out, err
 		}
-		time.Sleep(time.Duration(20+attempt*20) * time.Millisecond)
+		if attempt == maxAttempts-1 {
+			return out, ErrTxConflict
+		}
+		if err := sleepWithContext(ctx, retryDelay); err != nil {
+			return out, err
+		}
+		if retryDelay < 1200*time.Millisecond {
+			retryDelay *= 2
+		}
 	}
 
-	return out, fmt.Errorf("order failed after retries")
+	return out, ErrTxConflict
 }
 
 func (s *Service) CreateBusiness(ctx context.Context, in CreateBusinessInput) (int64, error) {
@@ -1266,6 +1276,17 @@ func normalish(seed float64) float64 {
 func isSerializationError(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "40001"
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 func maxAffordableBuy(priceMicros, balanceMicros, debtLimitMicros int64) (maxUnits, maxNotional, maxFee int64) {

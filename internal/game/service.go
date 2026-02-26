@@ -1079,6 +1079,9 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 	if err := applyDebtInterestTx(ctx, tx, seasonID, tickEvery, interestAPR); err != nil {
 		return err
 	}
+	if err := updateSeasonPeakNetWorthTx(ctx, tx, seasonID); err != nil {
+		return err
+	}
 
 	return tx.Commit(ctx)
 }
@@ -1185,6 +1188,25 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64) erro
 		}
 	}
 	return nil
+}
+
+func updateSeasonPeakNetWorthTx(ctx context.Context, tx pgx.Tx, seasonID int64) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE game.wallets w
+		SET peak_net_worth_micros = GREATEST(
+		        w.peak_net_worth_micros,
+		        w.balance_micros + COALESCE((
+		            SELECT SUM((p.quantity_units * s.current_price_micros) / $2)
+		            FROM game.positions p
+		            JOIN game.stocks s ON s.id = p.stock_id
+		            WHERE p.user_id = w.user_id
+		              AND p.season_id = w.season_id
+		        ), 0)
+		    ),
+		    updated_at = now()
+		WHERE w.season_id = $1
+	`, seasonID, ShareScale)
+	return err
 }
 
 func currentRegimeTx(ctx context.Context, tx pgx.Tx, seasonID int64) (string, error) {

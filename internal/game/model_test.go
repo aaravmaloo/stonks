@@ -56,3 +56,28 @@ func TestValidateEntityName(t *testing.T) {
 		t.Fatalf("expected blocked name to fail")
 	}
 }
+
+func TestMaxAffordableBuy(t *testing.T) {
+	price := int64(840 * MicrosPerStonky)
+	balance := int64(19_025) * MicrosPerStonky
+	debt := DebtLimitFromPeak(25_000 * MicrosPerStonky)
+
+	units, notional, fee := maxAffordableBuy(price, balance, debt)
+	if units <= 0 {
+		t.Fatalf("expected affordable units > 0")
+	}
+	total := notional + fee
+	if total > balance+debt {
+		t.Fatalf("total %d exceeds budget %d", total, balance+debt)
+	}
+
+	nextUnits := units + 1
+	nextNotional, err := notionalMicros(price, nextUnits)
+	if err != nil {
+		t.Fatalf("notional error: %v", err)
+	}
+	nextFee := int64(0.0015*float64(nextNotional) + 0.5)
+	if nextNotional+nextFee <= balance+debt {
+		t.Fatalf("expected units+1 to be unaffordable")
+	}
+}

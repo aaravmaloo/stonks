@@ -47,7 +47,7 @@ func main() {
 
 	runOnce := strings.EqualFold(strings.TrimSpace(os.Getenv("STANKS_WORKER_RUN_ONCE")), "true")
 	if runOnce {
-		if err := svc.RunMarketTick(ctx, seasonID, cfg.MarketTickEvery, cfg.InterestAPR); err != nil {
+		if err := svc.RunMarketTick(ctx, seasonID, cfg.MarketTickEvery, cfg.InterestAPR, cfg.MarketVolatility); err != nil {
 			logger.Error("tick failed", "err", err)
 			os.Exit(1)
 		}
@@ -58,7 +58,7 @@ func main() {
 	ticker := time.NewTicker(cfg.MarketTickEvery)
 	defer ticker.Stop()
 
-	logger.Info("worker started", "tick_every", cfg.MarketTickEvery.String())
+	logger.Info("worker started", "tick_every", cfg.MarketTickEvery.String(), "volatility", cfg.MarketVolatility)
 	for {
 		select {
 		case <-ctx.Done():
@@ -70,7 +70,7 @@ func main() {
 				logger.Error("season read failed", "err", err)
 				continue
 			}
-			if err := svc.RunMarketTick(ctx, seasonID, cfg.MarketTickEvery, cfg.InterestAPR); err != nil {
+			if err := svc.RunMarketTick(ctx, seasonID, cfg.MarketTickEvery, cfg.InterestAPR, cfg.MarketVolatility); err != nil {
 				logger.Error("market tick failed", "err", err)
 				continue
 			}

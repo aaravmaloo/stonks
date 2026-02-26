@@ -1008,11 +1008,12 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 	}
 	defer tx.Rollback(ctx)
 
+	params := volatilityParams(volatility)
 	regime, err := currentRegimeTx(ctx, tx, seasonID)
 	if err != nil {
 		return err
 	}
-	if s.nextFloat() < 0.03 {
+	if s.nextFloat() < params.RegimeSwitchProb {
 		regime = randomRegime(s.nextFloat())
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO game.market_state (season_id, regime, updated_at)
@@ -1051,28 +1052,43 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 		return err
 	}
 
-	noiseScale, shockProb, shockScale, capAbs := volatilityParams(volatility)
+	const minPriceMicros = int64(10_000)                // 0.01 stonky
+	const maxPriceMicros = int64(2_000_000_000_000_000) // 2 trillion stonky
 	for _, st := range stocks {
-		ret := regimeDrift(regime) + noiseScale*normalish(s.nextFloat()) + meanReversion(st.price, st.anchor)
-		if s.nextFloat() < shockProb {
-			ret += (s.nextFloat()*2 - 1) * shockScale
+		anchorRet := (0.30 * regimeDrift(regime)) + params.AnchorNoiseScale*normalish(s.nextFloat())
+		if s.nextFloat() < params.ShockProb*0.20 {
+			anchorRet += signedShock(s.nextFloat(), s.nextFloat(), params.ShockScale*0.40)
 		}
-		if ret > capAbs {
-			ret = capAbs
+		nextAnchor := evolvePrice(st.anchor, anchorRet, params.MaxDropPerTick)
+		if nextAnchor < minPriceMicros {
+			nextAnchor = minPriceMicros
 		}
-		if ret < -capAbs {
-			ret = -capAbs
+		if nextAnchor > maxPriceMicros {
+			nextAnchor = maxPriceMicros
 		}
-		next := int64(math.Round(float64(st.price) * (1 + ret)))
-		minPrice := int64(1 * MicrosPerStonky)
-		if next < minPrice {
-			next = minPrice
+
+		ret := regimeDrift(regime) + params.NoiseScale*normalish(s.nextFloat()) + meanReversion(st.price, st.anchor, params.MeanReversion)
+		if s.nextFloat() < params.ShockProb {
+			ret += signedShock(s.nextFloat(), s.nextFloat(), params.ShockScale)
+		}
+		if s.nextFloat() < params.ExtremeShockProb {
+			ret += signedShock(s.nextFloat(), s.nextFloat(), params.ExtremeShockScale)
+		}
+
+		next := evolvePrice(st.price, ret, params.MaxDropPerTick)
+		if next < minPriceMicros {
+			next = minPriceMicros
+		}
+		if next > maxPriceMicros {
+			next = maxPriceMicros
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE game.stocks
-			SET current_price_micros = $1, updated_at = now()
-			WHERE id = $2
-		`, next, st.id); err != nil {
+			SET current_price_micros = $1,
+			    anchor_price_micros = $2,
+			    updated_at = now()
+			WHERE id = $3
+		`, next, nextAnchor, st.id); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `
@@ -1254,23 +1270,46 @@ func randomRegime(seed float64) string {
 func regimeDrift(regime string) float64 {
 	switch regime {
 	case "bull":
-		return 0.0022
+		return 0.0085
 	case "bear":
-		return -0.0019
+		return -0.0085
 	default:
-		return 0.0002
+		return 0.0000
 	}
 }
 
-func meanReversion(price, anchor int64) float64 {
+func meanReversion(price, anchor int64, strength float64) float64 {
 	if anchor <= 0 {
 		return 0
 	}
-	return 0.06 * (float64(anchor-price) / float64(anchor))
+	return strength * (float64(anchor-price) / float64(anchor))
 }
 
 func normalish(seed float64) float64 {
 	return (seed + seed - 1)
+}
+
+func signedShock(magSeed, signSeed, base float64) float64 {
+	mag := base * (0.35 + 2.8*magSeed*magSeed)
+	if signSeed < 0.5 {
+		return -mag
+	}
+	return mag
+}
+
+func evolvePrice(priceMicros int64, ret, maxDropPerTick float64) int64 {
+	if priceMicros <= 0 {
+		return 1
+	}
+	// Bound only the downside; upside can run.
+	if ret < -maxDropPerTick {
+		ret = -maxDropPerTick
+	}
+	next := int64(math.Round(float64(priceMicros) * math.Exp(ret)))
+	if next < 1 {
+		next = 1
+	}
+	return next
 }
 
 func isSerializationError(err error) bool {
@@ -1320,14 +1359,56 @@ func maxAffordableBuy(priceMicros, balanceMicros, debtLimitMicros int64) (maxUni
 	return best, maxNotional, maxFee
 }
 
-func volatilityParams(mode string) (noiseScale, shockProb, shockScale, capAbs float64) {
+type marketDynamics struct {
+	NoiseScale        float64
+	ShockProb         float64
+	ShockScale        float64
+	ExtremeShockProb  float64
+	ExtremeShockScale float64
+	MeanReversion     float64
+	AnchorNoiseScale  float64
+	RegimeSwitchProb  float64
+	MaxDropPerTick    float64
+}
+
+func volatilityParams(mode string) marketDynamics {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "calm":
-		return 0.008, 0.02, 0.03, 0.08
+		return marketDynamics{
+			NoiseScale:        0.020,
+			ShockProb:         0.05,
+			ShockScale:        0.09,
+			ExtremeShockProb:  0.008,
+			ExtremeShockScale: 0.22,
+			MeanReversion:     0.03,
+			AnchorNoiseScale:  0.012,
+			RegimeSwitchProb:  0.04,
+			MaxDropPerTick:    1.20,
+		}
 	case "wild":
-		return 0.020, 0.08, 0.06, 0.12
+		return marketDynamics{
+			NoiseScale:        0.060,
+			ShockProb:         0.18,
+			ShockScale:        0.20,
+			ExtremeShockProb:  0.050,
+			ExtremeShockScale: 0.60,
+			MeanReversion:     0.010,
+			AnchorNoiseScale:  0.038,
+			RegimeSwitchProb:  0.11,
+			MaxDropPerTick:    2.60,
+		}
 	default:
-		return 0.014, 0.05, 0.045, 0.10
+		return marketDynamics{
+			NoiseScale:        0.038,
+			ShockProb:         0.11,
+			ShockScale:        0.14,
+			ExtremeShockProb:  0.020,
+			ExtremeShockScale: 0.35,
+			MeanReversion:     0.018,
+			AnchorNoiseScale:  0.022,
+			RegimeSwitchProb:  0.07,
+			MaxDropPerTick:    2.00,
+		}
 	}
 }
 

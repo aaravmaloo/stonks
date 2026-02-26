@@ -22,6 +22,7 @@ const (
 
 var (
 	ErrInvalidSymbol        = errors.New("symbol must be exactly 6 uppercase letters")
+	ErrStockNotFound        = errors.New("stock not found")
 	ErrDuplicateIdempotency = errors.New("duplicate idempotency key")
 	ErrInsufficientFunds    = errors.New("insufficient funds")
 	ErrInsufficientShares   = errors.New("insufficient shares")

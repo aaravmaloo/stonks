@@ -204,15 +204,22 @@ func renderDashboard(raw map[string]any) error {
 	if len(d.Positions) == 0 {
 		printInfo("No open positions yet.")
 	} else {
-		fmt.Printf("%-8s %-22s %10s %12s %12s %14s %14s\n", "SYMBOL", "NAME", "QTY", "AVG", "NOW", "VALUE", "P/L")
+		fmt.Printf("%-8s %-22s %10s %12s %12s %12s %9s %14s %14s\n", "SYMBOL", "NAME", "QTY", "BUY", "NOW", "DELTA", "DELTA%", "VALUE", "P/L")
 		for _, p := range d.Positions {
 			valueMicros := orderNotional(p.CurrentPriceMicros, p.QuantityUnits)
-			fmt.Printf("%-8s %-22s %10.4f %12s %12s %14s %14s\n",
+			priceDeltaMicros := p.CurrentPriceMicros - p.AvgPriceMicros
+			priceDeltaPct := 0.0
+			if p.AvgPriceMicros != 0 {
+				priceDeltaPct = (float64(priceDeltaMicros) / float64(p.AvgPriceMicros)) * 100
+			}
+			fmt.Printf("%-8s %-22s %10.4f %12s %12s %12s %9s %14s %14s\n",
 				p.Symbol,
 				truncate(p.DisplayName, 22),
 				game.UnitsToShares(p.QuantityUnits),
 				formatMicros(p.AvgPriceMicros),
 				formatMicros(p.CurrentPriceMicros),
+				colorizeMicros(priceDeltaMicros),
+				colorizePercent(priceDeltaPct),
 				formatMicros(valueMicros),
 				colorizeMicros(p.UnrealizedMicros),
 			)
@@ -452,6 +459,18 @@ func decodeInto[T any](in any) (T, error) {
 
 func colorizeMicros(v int64) string {
 	text := signedMicros(v)
+	switch {
+	case v > 0:
+		return success.Sprint(text)
+	case v < 0:
+		return danger.Sprint(text)
+	default:
+		return neutral.Sprint(text)
+	}
+}
+
+func colorizePercent(v float64) string {
+	text := fmt.Sprintf("%+.2f%%", v)
 	switch {
 	case v > 0:
 		return success.Sprint(text)

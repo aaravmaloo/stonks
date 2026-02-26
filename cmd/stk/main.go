@@ -22,9 +22,10 @@ func main() {
 	apiBase := cfg.APIBaseURL
 
 	root := &cobra.Command{
-		Use:          "stk",
-		Short:        "Stanks CLI game client",
-		SilenceUsage: true,
+		Use:           "stk",
+		Short:         "Stanks CLI game client",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 
 	root.AddCommand(

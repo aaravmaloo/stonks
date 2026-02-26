@@ -59,17 +59,18 @@ The worker runs every `5m` by default and updates listed stocks with:
 
 - Regime drift (`bull`, `neutral`, `bear`)
 - Stochastic noise
-- Mean reversion toward anchor price
-- Low-probability shock events
-- Per-tick clamp at `[-8%, +8%]`
+- Drifting anchor prices (not fixed to seed)
+- Mean reversion toward the moving anchor
+- Jump shocks and extreme tail shocks
+- One-sided downside guardrail per tick (to avoid hard-zero crashes), with no hard upside clamp
 
 Implemented return shape:
 
-`return = drift(regime) + noise + meanReversion + optionalShock`
+`return = drift(regime) + noise + meanReversion + optionalShock + optionalExtremeShock`
 
 Then:
 
-`price_next = max(min_price, price_now * (1 + return))`
+`price_next = clamp(min_price, max_price, price_now * exp(return))`
 
 Economy tick also applies:
 

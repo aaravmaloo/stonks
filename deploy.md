@@ -129,8 +129,8 @@ Expect:
 
 ```bash
 export STK_API_BASE_URL=https://<api-domain>
-stk signup --email you@example.com --password '...'
-stk login --email you@example.com --password '...'
+stk signup
+stk login
 stk dash
 ```
 

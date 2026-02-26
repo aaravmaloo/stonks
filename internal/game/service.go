@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -346,95 +348,105 @@ func (s *Service) PlaceOrder(ctx context.Context, in OrderInput) (OrderResult, e
 		return out, fmt.Errorf("side must be buy or sell")
 	}
 
-	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
-	if err != nil {
-		return out, err
-	}
-	defer tx.Rollback(ctx)
-
-	if err := claimIdempotency(ctx, tx, in.UserID, in.IdempotencyKey, "order"); err != nil {
-		return out, err
-	}
-
-	var stockID int64
-	var listed bool
-	if err := tx.QueryRow(ctx, `
-		SELECT id, current_price_micros, listed_public
-		FROM game.stocks
-		WHERE season_id = $1 AND symbol = $2
-		FOR UPDATE
-	`, in.SeasonID, in.Symbol).Scan(&stockID, &out.PriceMicros, &listed); err != nil {
-		return out, err
-	}
-	if !listed {
-		return out, fmt.Errorf("stock is not listed publicly")
-	}
-	notional, err := notionalMicros(out.PriceMicros, in.QuantityUnits)
-	if err != nil {
-		return out, err
-	}
-	fee := int64(math.Round(float64(notional) * 0.0015))
-	out.NotionalMicros = notional
-	out.FeeMicros = fee
-
-	var balance, peak int64
-	if err := tx.QueryRow(ctx, `
-		SELECT balance_micros, peak_net_worth_micros
-		FROM game.wallets
-		WHERE user_id = $1 AND season_id = $2
-		FOR UPDATE
-	`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
-		return out, err
-	}
-	debtLimit := DebtLimitFromPeak(peak)
-
-	switch in.Side {
-	case "buy":
-		nextBalance := balance - notional - fee
-		if nextBalance < -debtLimit {
-			return out, ErrInsufficientFunds
-		}
-		if err := upsertBuyPosition(ctx, tx, in.UserID, in.SeasonID, stockID, in.QuantityUnits, out.PriceMicros); err != nil {
+	for attempt := 0; attempt < 4; attempt++ {
+		tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+		if err != nil {
 			return out, err
 		}
-		balance = nextBalance
-	case "sell":
-		if err := applySellPosition(ctx, tx, in.UserID, in.SeasonID, stockID, in.QuantityUnits); err != nil {
+		err = func() error {
+			defer tx.Rollback(ctx)
+
+			if err := claimIdempotency(ctx, tx, in.UserID, in.IdempotencyKey, "order"); err != nil {
+				return err
+			}
+
+			var stockID int64
+			var listed bool
+			if err := tx.QueryRow(ctx, `
+				SELECT id, current_price_micros, listed_public
+				FROM game.stocks
+				WHERE season_id = $1 AND symbol = $2
+				FOR UPDATE
+			`, in.SeasonID, in.Symbol).Scan(&stockID, &out.PriceMicros, &listed); err != nil {
+				return err
+			}
+			if !listed {
+				return fmt.Errorf("stock is not listed publicly")
+			}
+			notional, err := notionalMicros(out.PriceMicros, in.QuantityUnits)
+			if err != nil {
+				return err
+			}
+			fee := int64(math.Round(float64(notional) * 0.0015))
+			out.NotionalMicros = notional
+			out.FeeMicros = fee
+
+			var balance, peak int64
+			if err := tx.QueryRow(ctx, `
+				SELECT balance_micros, peak_net_worth_micros
+				FROM game.wallets
+				WHERE user_id = $1 AND season_id = $2
+				FOR UPDATE
+			`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+				return err
+			}
+			debtLimit := DebtLimitFromPeak(peak)
+
+			switch in.Side {
+			case "buy":
+				nextBalance := balance - notional - fee
+				if nextBalance < -debtLimit {
+					return ErrInsufficientFunds
+				}
+				if err := upsertBuyPosition(ctx, tx, in.UserID, in.SeasonID, stockID, in.QuantityUnits, out.PriceMicros); err != nil {
+					return err
+				}
+				balance = nextBalance
+			case "sell":
+				if err := applySellPosition(ctx, tx, in.UserID, in.SeasonID, stockID, in.QuantityUnits); err != nil {
+					return err
+				}
+				balance = balance + notional - fee
+			}
+
+			if _, err := tx.Exec(ctx, `
+				UPDATE game.wallets
+				SET balance_micros = $1, updated_at = now()
+				WHERE user_id = $2 AND season_id = $3
+			`, balance, in.UserID, in.SeasonID); err != nil {
+				return err
+			}
+
+			if err := s.updatePeakNetWorthTx(ctx, tx, in.UserID, in.SeasonID); err != nil {
+				return err
+			}
+
+			if err := appendLedgerEntries(ctx, tx, in.UserID, in.SeasonID, in.Side, notional, fee); err != nil {
+				return err
+			}
+
+			err = tx.QueryRow(ctx, `
+				INSERT INTO game.orders (user_id, season_id, stock_id, side, quantity_units, price_micros, fee_micros)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+				RETURNING id
+			`, in.UserID, in.SeasonID, stockID, in.Side, in.QuantityUnits, out.PriceMicros, fee).Scan(&out.OrderID)
+			if err != nil {
+				return err
+			}
+
+			out.BalanceMicros = balance
+			return tx.Commit(ctx)
+		}()
+		if err == nil {
+			return out, nil
+		}
+		if !isSerializationError(err) || attempt == 3 {
 			return out, err
 		}
-		balance = balance + notional - fee
+		time.Sleep(time.Duration(20+attempt*20) * time.Millisecond)
 	}
 
-	if _, err := tx.Exec(ctx, `
-		UPDATE game.wallets
-		SET balance_micros = $1, updated_at = now()
-		WHERE user_id = $2 AND season_id = $3
-	`, balance, in.UserID, in.SeasonID); err != nil {
-		return out, err
-	}
-
-	if err := s.updatePeakNetWorthTx(ctx, tx, in.UserID, in.SeasonID); err != nil {
-		return out, err
-	}
-
-	if err := appendLedgerEntries(ctx, tx, in.UserID, in.SeasonID, in.Side, notional, fee); err != nil {
-		return out, err
-	}
-
-	err = tx.QueryRow(ctx, `
-		INSERT INTO game.orders (user_id, season_id, stock_id, side, quantity_units, price_micros, fee_micros)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id
-	`, in.UserID, in.SeasonID, stockID, in.Side, in.QuantityUnits, out.PriceMicros, fee).Scan(&out.OrderID)
-	if err != nil {
-		return out, err
-	}
-
-	out.BalanceMicros = balance
-	if err := tx.Commit(ctx); err != nil {
-		return out, err
-	}
-	return out, nil
+	return out, fmt.Errorf("order failed after retries")
 }
 
 func (s *Service) CreateBusiness(ctx context.Context, in CreateBusinessInput) (int64, error) {
@@ -975,7 +987,7 @@ func (s *Service) ReplaySync(ctx context.Context, userID string, seasonID int64,
 	return results, nil
 }
 
-func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery time.Duration, interestAPR float64) error {
+func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery time.Duration, interestAPR float64, volatility string) error {
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
@@ -1025,16 +1037,17 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 		return err
 	}
 
+	noiseScale, shockProb, shockScale, capAbs := volatilityParams(volatility)
 	for _, st := range stocks {
-		ret := regimeDrift(regime) + 0.014*normalish(s.nextFloat()) + meanReversion(st.price, st.anchor)
-		if s.nextFloat() < 0.05 {
-			ret += (s.nextFloat()*2 - 1) * 0.045
+		ret := regimeDrift(regime) + noiseScale*normalish(s.nextFloat()) + meanReversion(st.price, st.anchor)
+		if s.nextFloat() < shockProb {
+			ret += (s.nextFloat()*2 - 1) * shockScale
 		}
-		if ret > 0.10 {
-			ret = 0.10
+		if ret > capAbs {
+			ret = capAbs
 		}
-		if ret < -0.10 {
-			ret = -0.10
+		if ret < -capAbs {
+			ret = -capAbs
 		}
 		next := int64(math.Round(float64(st.price) * (1 + ret)))
 		minPrice := int64(1 * MicrosPerStonky)
@@ -1222,6 +1235,22 @@ func meanReversion(price, anchor int64) float64 {
 
 func normalish(seed float64) float64 {
 	return (seed + seed - 1)
+}
+
+func isSerializationError(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "40001"
+}
+
+func volatilityParams(mode string) (noiseScale, shockProb, shockScale, capAbs float64) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "calm":
+		return 0.008, 0.02, 0.03, 0.08
+	case "wild":
+		return 0.020, 0.08, 0.06, 0.12
+	default:
+		return 0.014, 0.05, 0.045, 0.10
+	}
 }
 
 func (s *Service) nextFloat() float64 {

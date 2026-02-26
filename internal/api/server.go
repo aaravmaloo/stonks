@@ -620,6 +620,8 @@ func writeDomainError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, game.ErrInvalidSymbol):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, game.ErrStockNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	}

@@ -25,18 +25,18 @@ Stanks is a true CLI stock sandbox game written in Go.
 4. Browse market and trade:
    - `stk stocks list all`
    - `stk stocks list COBOLT`
-   - `stk stocks buy COBOLT --qty 1.5`
-   - `stk stocks sell COBOLT --qty 0.5`
+   - `stk stocks buy COBOLT` (then enter shares in prompt)
+   - `stk stocks sell COBOLT` (then enter shares in prompt)
 5. Build businesses:
-   - `stk business create "Acme Labs" --visibility private`
+   - `stk business create "Acme Labs"` (then choose visibility in prompt)
    - `stk business visibility <id> public`
-   - `stk business ipo <id> --symbol ACMELB --price 120`
+   - `stk business ipo <id>` (then enter symbol and price in prompts)
 6. Hire employees for business revenue:
    - `stk business employees candidates`
    - `stk business employees hire <business_id> <candidate_id>`
 7. Create and list your own stock:
-   - `stk stocks create ACMELB --name "Acme Labs Holdings" --business <id>`
-   - `stk stocks ipo ACMELB --price 120`
+   - `stk stocks create ACMELB` (then enter display name and business id in prompts)
+   - `stk stocks ipo ACMELB` (then enter price in prompt)
 8. Follow players and compare rankings:
    - `stk friends add <invite_code>`
    - `stk leaderboard global`
@@ -142,15 +142,15 @@ go run ./cmd/stanks-worker
 ### Run CLI
 
 ```bash
-go run ./cmd/stk --help
+go run ./cmd/stk
 ```
 
 ## CLI command reference
 
 ### Auth/session
 
-- `stk signup --email ... --password ... [--username ...]`
-- `stk login --email ... --password ...`
+- `stk signup` (interactive prompts)
+- `stk login` (interactive prompts)
 - `stk logout`
 
 ### Dashboard/sync
@@ -161,10 +161,10 @@ go run ./cmd/stk --help
 ### Stocks
 
 - `stk stocks list [all|SYMBOL]`
-- `stk stocks buy <symbol> --qty <float>`
-- `stk stocks sell <symbol> --qty <float>`
-- `stk stocks create <symbol> --name "<display>" --business <id>`
-- `stk stocks ipo <symbol> --price <stonky>`
+- `stk stocks buy [symbol]` (interactive quantity prompt)
+- `stk stocks sell [symbol]` (interactive quantity prompt)
+- `stk stocks create [symbol]` (interactive display name + business id prompts)
+- `stk stocks ipo [symbol]` (interactive price prompt)
 
 Alias:
 
@@ -172,13 +172,13 @@ Alias:
 
 ### Business
 
-- `stk business create "<name>" --visibility private|public`
-- `stk business state <business_id>`
-- `stk business visibility <business_id> <private|public>`
-- `stk business ipo <business_id> --symbol <6-char> --price <stonky>`
-- `stk business employees list <business_id>`
+- `stk business create [name]` (interactive visibility prompt)
+- `stk business state [business_id]`
+- `stk business visibility [business_id] [private|public]`
+- `stk business ipo [business_id]` (interactive symbol + price prompts)
+- `stk business employees list [business_id]`
 - `stk business employees candidates`
-- `stk business employees hire <business_id> <candidate_id>`
+- `stk business employees hire [business_id] [candidate_id]`
 
 Alias:
 
@@ -188,8 +188,8 @@ Alias:
 
 - `stk leaderboard global`
 - `stk leaderboard friends`
-- `stk friends add <invite_code>`
-- `stk friends remove <invite_code>`
+- `stk friends add [invite_code]`
+- `stk friends remove [invite_code]`
 
 ## Persistence and sync behavior
 

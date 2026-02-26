@@ -1026,15 +1026,15 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 	}
 
 	for _, st := range stocks {
-		ret := regimeDrift(regime) + 0.008*normalish(s.nextFloat()) + meanReversion(st.price, st.anchor)
-		if s.nextFloat() < 0.02 {
-			ret += (s.nextFloat()*2 - 1) * 0.03
+		ret := regimeDrift(regime) + 0.014*normalish(s.nextFloat()) + meanReversion(st.price, st.anchor)
+		if s.nextFloat() < 0.05 {
+			ret += (s.nextFloat()*2 - 1) * 0.045
 		}
-		if ret > 0.08 {
-			ret = 0.08
+		if ret > 0.10 {
+			ret = 0.10
 		}
-		if ret < -0.08 {
-			ret = -0.08
+		if ret < -0.10 {
+			ret = -0.10
 		}
 		next := int64(math.Round(float64(st.price) * (1 + ret)))
 		minPrice := int64(1 * MicrosPerStonky)
@@ -1205,11 +1205,11 @@ func randomRegime(seed float64) string {
 func regimeDrift(regime string) float64 {
 	switch regime {
 	case "bull":
-		return 0.0014
+		return 0.0022
 	case "bear":
-		return -0.0012
+		return -0.0019
 	default:
-		return 0.0001
+		return 0.0002
 	}
 }
 
@@ -1217,7 +1217,7 @@ func meanReversion(price, anchor int64) float64 {
 	if anchor <= 0 {
 		return 0
 	}
-	return 0.05 * (float64(anchor-price) / float64(anchor))
+	return 0.06 * (float64(anchor-price) / float64(anchor))
 }
 
 func normalish(seed float64) float64 {

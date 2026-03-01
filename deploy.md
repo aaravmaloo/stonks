@@ -20,6 +20,9 @@ Run:
 
 ```bash
 psql "$DATABASE_URL" -f migrations/0001_init.sql
+psql "$DATABASE_URL" -f migrations/0002_business_expansion.sql
+psql "$DATABASE_URL" -f migrations/0003_loan_consequences.sql
+psql "$DATABASE_URL" -f migrations/0004_business_depth.sql
 ```
 
 Verify tables exist:

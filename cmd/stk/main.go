@@ -35,6 +35,7 @@ func main() {
 		newDashCmd(&apiBase),
 		newSyncCmd(&apiBase),
 		newStocksCmd(&apiBase),
+		newFundsCmd(&apiBase),
 		newBusinessCmd(&apiBase),
 		newLeaderboardCmd(&apiBase),
 		newFriendsCmd(&apiBase),
@@ -451,13 +452,344 @@ func newBusinessCmd(apiBase *string) *cobra.Command {
 		Use:     "business",
 		Short:   "Business management commands",
 		Aliases: []string{"bussin"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runBusinessGuidedFlow(cmd, apiBase)
+		},
 	}
 	business.AddCommand(newBusinessCreateCmd(apiBase))
 	business.AddCommand(newBusinessStateCmd(apiBase))
 	business.AddCommand(newBusinessVisibilityCmd(apiBase))
 	business.AddCommand(newBusinessIPOCmd(apiBase))
 	business.AddCommand(newBusinessEmployeesCmd(apiBase))
+	business.AddCommand(newBusinessMachineryCmd(apiBase))
+	business.AddCommand(newBusinessLoansCmd(apiBase))
+	business.AddCommand(newBusinessStrategyCmd(apiBase))
+	business.AddCommand(newBusinessUpgradesCmd(apiBase))
+	business.AddCommand(newBusinessReserveCmd(apiBase))
+	business.AddCommand(newBusinessSellCmd(apiBase))
 	return business
+}
+
+func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
+	sess, err := cl.LoadSession()
+	if err != nil {
+		return fmt.Errorf("login required: %w", err)
+	}
+	client := newClient(apiBase)
+	ctx, cancel := context.WithTimeout(cmd.Context(), 45*time.Second)
+	defer cancel()
+
+	action, err := promptChoice("Business action", []string{
+		"create", "state", "visibility", "ipo",
+		"employees_candidates", "employees_list", "employees_hire", "employees_train",
+		"machinery_list", "machinery_buy",
+		"loans_list", "loans_take", "loans_repay",
+		"strategy", "upgrade", "reserve_deposit", "reserve_withdraw",
+		"sell",
+	}, "state")
+	if err != nil {
+		return err
+	}
+
+	switch action {
+	case "create":
+		name, err := promptRequired("Business name")
+		if err != nil {
+			return err
+		}
+		visibility, err := promptChoice("Visibility", []string{"private", "public"}, "private")
+		if err != nil {
+			return err
+		}
+		idem := uuid.NewString()
+		out, err := client.CreateBusiness(ctx, sess.AccessToken, name, visibility, idem)
+		if err != nil {
+			return err
+		}
+		return renderBusinessCreated(out, name, visibility)
+	case "state":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		out, err := client.BusinessState(ctx, sess.AccessToken, id)
+		if err != nil {
+			return err
+		}
+		return renderBusinessState(out)
+	case "visibility":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		visibility, err := promptChoice("Visibility", []string{"private", "public"}, "private")
+		if err != nil {
+			return err
+		}
+		idem := uuid.NewString()
+		out, err := client.SetBusinessVisibility(ctx, sess.AccessToken, id, visibility, idem)
+		if err != nil {
+			return err
+		}
+		return renderSimpleOK(out, fmt.Sprintf("Business %d visibility set to %s.", id, visibility))
+	case "ipo":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		symbol, err := promptSymbol("Stock symbol")
+		if err != nil {
+			return err
+		}
+		price, err := promptFloat("IPO price (stonky)", 0)
+		if err != nil {
+			return err
+		}
+		priceMicros := game.StonkyToMicros(price)
+		idem := uuid.NewString()
+		out, err := client.BusinessIPO(ctx, sess.AccessToken, id, symbol, priceMicros, idem)
+		if err != nil {
+			return err
+		}
+		return renderSimpleOK(out, fmt.Sprintf("Business %d IPO opened as %s at %s stonky.", id, symbol, formatMicros(priceMicros)))
+	case "employees_candidates":
+		out, err := client.ListEmployeeCandidates(ctx, sess.AccessToken)
+		if err != nil {
+			return err
+		}
+		return renderEmployeeCandidates(out)
+	case "employees_list":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		out, err := client.ListBusinessEmployees(ctx, sess.AccessToken, id)
+		if err != nil {
+			return err
+		}
+		return renderBusinessEmployees(out, id)
+	case "employees_hire":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		candidateID, err := promptInt64("Candidate ID", 1)
+		if err != nil {
+			return err
+		}
+		idem := uuid.NewString()
+		out, err := client.HireEmployee(ctx, sess.AccessToken, id, candidateID, idem)
+		if err != nil {
+			return err
+		}
+		return renderSimpleOK(out, fmt.Sprintf("Hired candidate %d for business %d.", candidateID, id))
+	case "employees_train":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		employeeID, err := promptInt64("Employee ID", 1)
+		if err != nil {
+			return err
+		}
+		idem := uuid.NewString()
+		out, err := client.TrainProfessional(ctx, sess.AccessToken, id, employeeID, idem)
+		if err != nil {
+			return err
+		}
+		return renderSimpleOK(out, fmt.Sprintf("Trained employee %d in business %d.", employeeID, id))
+	case "machinery_list":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		out, err := client.ListBusinessMachinery(ctx, sess.AccessToken, id)
+		if err != nil {
+			return err
+		}
+		return renderBusinessMachinery(out, id)
+	case "machinery_buy":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		machineType, err := promptChoice("Machine type", []string{"assembly_line", "robotics_cell", "cloud_cluster", "bio_reactor", "quantum_rig"}, "assembly_line")
+		if err != nil {
+			return err
+		}
+		idem := uuid.NewString()
+		out, err := client.BuyBusinessMachinery(ctx, sess.AccessToken, id, machineType, idem)
+		if err != nil {
+			return err
+		}
+		return renderSimpleOK(out, fmt.Sprintf("Installed %s for business %d.", machineType, id))
+	case "loans_list":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		out, err := client.ListBusinessLoans(ctx, sess.AccessToken, id)
+		if err != nil {
+			return err
+		}
+		return renderBusinessLoans(out, id)
+	case "loans_take":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		amount, err := promptFloat("Loan amount (stonky)", 0)
+		if err != nil {
+			return err
+		}
+		amountMicros := game.StonkyToMicros(amount)
+		idem := uuid.NewString()
+		out, err := client.TakeBusinessLoan(ctx, sess.AccessToken, id, amountMicros, idem)
+		if err != nil {
+			return err
+		}
+		return renderSimpleOK(out, fmt.Sprintf("Loan drawn for business %d: %s stonky.", id, formatMicros(amountMicros)))
+	case "loans_repay":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		amount, err := promptFloat("Repay amount (stonky)", 0)
+		if err != nil {
+			return err
+		}
+		amountMicros := game.StonkyToMicros(amount)
+		idem := uuid.NewString()
+		out, err := client.RepayBusinessLoan(ctx, sess.AccessToken, id, amountMicros, idem)
+		if err != nil {
+			return err
+		}
+		return renderSimpleOK(out, fmt.Sprintf("Loan repayment submitted for business %d.", id))
+	case "strategy":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		strategy, err := promptChoice("Strategy", []string{"aggressive", "balanced", "defensive"}, "balanced")
+		if err != nil {
+			return err
+		}
+		idem := uuid.NewString()
+		out, err := client.SetBusinessStrategy(ctx, sess.AccessToken, id, strategy, idem)
+		if err != nil {
+			return err
+		}
+		return renderSimpleOK(out, fmt.Sprintf("Business %d strategy set to %s.", id, strategy))
+	case "upgrade":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		upgrade, err := promptChoice("Upgrade", []string{"marketing", "rd", "automation", "compliance"}, "marketing")
+		if err != nil {
+			return err
+		}
+		idem := uuid.NewString()
+		out, err := client.BuyBusinessUpgrade(ctx, sess.AccessToken, id, upgrade, idem)
+		if err != nil {
+			return err
+		}
+		return renderSimpleOK(out, fmt.Sprintf("Business %d upgraded: %s.", id, upgrade))
+	case "reserve_deposit":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		amount, err := promptFloat("Deposit amount (stonky)", 0)
+		if err != nil {
+			return err
+		}
+		amountMicros := game.StonkyToMicros(amount)
+		idem := uuid.NewString()
+		out, err := client.BusinessReserveDeposit(ctx, sess.AccessToken, id, amountMicros, idem)
+		if err != nil {
+			return err
+		}
+		return renderSimpleOK(out, fmt.Sprintf("Business %d reserve deposit: %s stonky.", id, formatMicros(amountMicros)))
+	case "reserve_withdraw":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		amount, err := promptFloat("Withdraw amount (stonky)", 0)
+		if err != nil {
+			return err
+		}
+		amountMicros := game.StonkyToMicros(amount)
+		idem := uuid.NewString()
+		out, err := client.BusinessReserveWithdraw(ctx, sess.AccessToken, id, amountMicros, idem)
+		if err != nil {
+			return err
+		}
+		return renderSimpleOK(out, fmt.Sprintf("Business %d reserve withdraw: %s stonky.", id, formatMicros(amountMicros)))
+	case "sell":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		idem := uuid.NewString()
+		out, err := client.SellBusinessToBank(ctx, sess.AccessToken, id, idem)
+		if err != nil {
+			return err
+		}
+		return renderSimpleOK(out, fmt.Sprintf("Business %d sold to the bank.", id))
+	default:
+		return nil
+	}
+}
+
+func runFundsGuidedFlow(cmd *cobra.Command, apiBase *string) error {
+	sess, err := cl.LoadSession()
+	if err != nil {
+		return fmt.Errorf("login required: %w", err)
+	}
+	client := newClient(apiBase)
+	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+	defer cancel()
+
+	action, err := promptChoice("Funds action", []string{"list", "buy", "sell"}, "list")
+	if err != nil {
+		return err
+	}
+	switch action {
+	case "list":
+		out, err := client.ListFunds(ctx, sess.AccessToken)
+		if err != nil {
+			return err
+		}
+		return renderFundsList(out)
+	case "buy", "sell":
+		code, qty, err := fundCodeAndQty(nil)
+		if err != nil {
+			return err
+		}
+		units, err := game.SharesToUnits(qty)
+		if err != nil {
+			return err
+		}
+		idem := uuid.NewString()
+		var out map[string]any
+		if action == "buy" {
+			out, err = client.BuyFund(ctx, sess.AccessToken, code, idem, units)
+		} else {
+			out, err = client.SellFund(ctx, sess.AccessToken, code, idem, units)
+		}
+		if err != nil {
+			return err
+		}
+		label := "Bought"
+		if action == "sell" {
+			label = "Sold"
+		}
+		return renderSimpleOK(out, fmt.Sprintf("%s %.4f units of %s.", label, qty, code))
+	default:
+		return nil
+	}
 }
 
 func newBusinessCreateCmd(apiBase *string) *cobra.Command {
@@ -704,7 +1036,550 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 			return renderSimpleOK(out, fmt.Sprintf("Hired candidate %d for business %d.", candidateID, businessID))
 		},
 	})
+	employees.AddCommand(&cobra.Command{
+		Use:   "train [business_id] [employee_id]",
+		Short: "Train a professional to increase output (also raises risk)",
+		Args:  cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			if err != nil {
+				return err
+			}
+			employeeID, err := int64FromArgOrPrompt(args, 1, "Employee ID")
+			if err != nil {
+				return err
+			}
+			idem := uuid.NewString()
+			path := fmt.Sprintf("/v1/businesses/%d/employees/%d/train", businessID, employeeID)
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.TrainProfessional(ctx, sess.AccessToken, businessID, employeeID, idem)
+			if err != nil {
+				return queueOnNetworkError(err, syncq.Command{
+					Method:         "POST",
+					Path:           path,
+					Body:           map[string]any{},
+					IdempotencyKey: idem,
+				})
+			}
+			return renderSimpleOK(out, fmt.Sprintf("Trained employee %d in business %d.", employeeID, businessID))
+		},
+	})
 	return employees
+}
+
+func newBusinessMachineryCmd(apiBase *string) *cobra.Command {
+	machinery := &cobra.Command{
+		Use:   "machinery",
+		Short: "Machinery operations for scaling business output",
+	}
+	machinery.AddCommand(&cobra.Command{
+		Use:   "list [business_id]",
+		Short: "List machinery installed in a business",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			if err != nil {
+				return err
+			}
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.ListBusinessMachinery(ctx, sess.AccessToken, businessID)
+			if err != nil {
+				return err
+			}
+			return renderBusinessMachinery(out, businessID)
+		},
+	})
+	machinery.AddCommand(&cobra.Command{
+		Use:   "buy [business_id] [machine_type]",
+		Short: "Buy or upgrade machinery (assembly_line, robotics_cell, cloud_cluster, bio_reactor, quantum_rig)",
+		Args:  cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			if err != nil {
+				return err
+			}
+			machineType := ""
+			if len(args) >= 2 {
+				machineType = strings.ToLower(strings.TrimSpace(args[1]))
+			} else {
+				machineType, err = promptChoice("Machine type", []string{"assembly_line", "robotics_cell", "cloud_cluster", "bio_reactor", "quantum_rig"}, "assembly_line")
+				if err != nil {
+					return err
+				}
+			}
+			idem := uuid.NewString()
+			path := fmt.Sprintf("/v1/businesses/%d/machinery/buy", businessID)
+			body := map[string]any{"machine_type": machineType}
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.BuyBusinessMachinery(ctx, sess.AccessToken, businessID, machineType, idem)
+			if err != nil {
+				return queueOnNetworkError(err, syncq.Command{
+					Method:         "POST",
+					Path:           path,
+					Body:           body,
+					IdempotencyKey: idem,
+				})
+			}
+			return renderSimpleOK(out, fmt.Sprintf("Installed %s for business %d.", machineType, businessID))
+		},
+	})
+	return machinery
+}
+
+func newBusinessLoansCmd(apiBase *string) *cobra.Command {
+	loans := &cobra.Command{
+		Use:   "loans",
+		Short: "Business loan operations",
+	}
+	loans.AddCommand(&cobra.Command{
+		Use:   "list [business_id]",
+		Short: "List loans and delinquency status for a business",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			if err != nil {
+				return err
+			}
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.ListBusinessLoans(ctx, sess.AccessToken, businessID)
+			if err != nil {
+				return err
+			}
+			return renderBusinessLoans(out, businessID)
+		},
+	})
+	loans.AddCommand(&cobra.Command{
+		Use:   "take [business_id] [stonky]",
+		Short: "Take a business loan",
+		Args:  cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			if err != nil {
+				return err
+			}
+			amount := 0.0
+			if len(args) >= 2 {
+				amount, err = strconv.ParseFloat(strings.TrimSpace(args[1]), 64)
+				if err != nil || amount <= 0 {
+					return fmt.Errorf("loan amount must be a positive number")
+				}
+			} else {
+				amount, err = promptFloat("Loan amount (stonky)", 0)
+				if err != nil {
+					return err
+				}
+			}
+			amountMicros := game.StonkyToMicros(amount)
+			idem := uuid.NewString()
+			path := fmt.Sprintf("/v1/businesses/%d/loans/take", businessID)
+			body := map[string]any{"amount_micros": amountMicros}
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.TakeBusinessLoan(ctx, sess.AccessToken, businessID, amountMicros, idem)
+			if err != nil {
+				return queueOnNetworkError(err, syncq.Command{
+					Method:         "POST",
+					Path:           path,
+					Body:           body,
+					IdempotencyKey: idem,
+				})
+			}
+			return renderSimpleOK(out, fmt.Sprintf("Loan drawn for business %d: %s stonky.", businessID, formatMicros(amountMicros)))
+		},
+	})
+	loans.AddCommand(&cobra.Command{
+		Use:   "repay [business_id] [stonky]",
+		Short: "Repay business loans",
+		Args:  cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			if err != nil {
+				return err
+			}
+			amount := 0.0
+			if len(args) >= 2 {
+				amount, err = strconv.ParseFloat(strings.TrimSpace(args[1]), 64)
+				if err != nil || amount <= 0 {
+					return fmt.Errorf("repay amount must be a positive number")
+				}
+			} else {
+				amount, err = promptFloat("Repay amount (stonky)", 0)
+				if err != nil {
+					return err
+				}
+			}
+			amountMicros := game.StonkyToMicros(amount)
+			idem := uuid.NewString()
+			path := fmt.Sprintf("/v1/businesses/%d/loans/repay", businessID)
+			body := map[string]any{"amount_micros": amountMicros}
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.RepayBusinessLoan(ctx, sess.AccessToken, businessID, amountMicros, idem)
+			if err != nil {
+				return queueOnNetworkError(err, syncq.Command{
+					Method:         "POST",
+					Path:           path,
+					Body:           body,
+					IdempotencyKey: idem,
+				})
+			}
+			return renderSimpleOK(out, fmt.Sprintf("Loan repayment submitted for business %d.", businessID))
+		},
+	})
+	return loans
+}
+
+func newBusinessSellCmd(apiBase *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "sell [business_id]",
+		Short: "Sell your business to the bank at algorithmic valuation",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			if err != nil {
+				return err
+			}
+			idem := uuid.NewString()
+			path := fmt.Sprintf("/v1/businesses/%d/sell", businessID)
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.SellBusinessToBank(ctx, sess.AccessToken, businessID, idem)
+			if err != nil {
+				return queueOnNetworkError(err, syncq.Command{
+					Method:         "POST",
+					Path:           path,
+					Body:           map[string]any{},
+					IdempotencyKey: idem,
+				})
+			}
+			return renderSimpleOK(out, fmt.Sprintf("Business %d sold to the bank.", businessID))
+		},
+	}
+}
+
+func newBusinessStrategyCmd(apiBase *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "strategy [business_id] [aggressive|balanced|defensive]",
+		Short: "Set business strategy mode",
+		Args:  cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			if err != nil {
+				return err
+			}
+			strategy := ""
+			if len(args) >= 2 {
+				strategy = strings.ToLower(strings.TrimSpace(args[1]))
+			} else {
+				strategy, err = promptChoice("Strategy", []string{"aggressive", "balanced", "defensive"}, "balanced")
+				if err != nil {
+					return err
+				}
+			}
+			idem := uuid.NewString()
+			path := fmt.Sprintf("/v1/businesses/%d/strategy", businessID)
+			body := map[string]any{"strategy": strategy}
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.SetBusinessStrategy(ctx, sess.AccessToken, businessID, strategy, idem)
+			if err != nil {
+				return queueOnNetworkError(err, syncq.Command{
+					Method:         "POST",
+					Path:           path,
+					Body:           body,
+					IdempotencyKey: idem,
+				})
+			}
+			return renderSimpleOK(out, fmt.Sprintf("Business %d strategy set to %s.", businessID, strategy))
+		},
+	}
+}
+
+func newBusinessUpgradesCmd(apiBase *string) *cobra.Command {
+	upgrades := &cobra.Command{
+		Use:   "upgrades",
+		Short: "Buy strategic business upgrades",
+	}
+	upgrades.AddCommand(&cobra.Command{
+		Use:   "buy [business_id] [marketing|rd|automation|compliance]",
+		Short: "Purchase an upgrade level",
+		Args:  cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			if err != nil {
+				return err
+			}
+			upgrade := ""
+			if len(args) >= 2 {
+				upgrade = strings.ToLower(strings.TrimSpace(args[1]))
+			} else {
+				upgrade, err = promptChoice("Upgrade", []string{"marketing", "rd", "automation", "compliance"}, "marketing")
+				if err != nil {
+					return err
+				}
+			}
+			idem := uuid.NewString()
+			path := fmt.Sprintf("/v1/businesses/%d/upgrades/buy", businessID)
+			body := map[string]any{"upgrade": upgrade}
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.BuyBusinessUpgrade(ctx, sess.AccessToken, businessID, upgrade, idem)
+			if err != nil {
+				return queueOnNetworkError(err, syncq.Command{
+					Method:         "POST",
+					Path:           path,
+					Body:           body,
+					IdempotencyKey: idem,
+				})
+			}
+			return renderSimpleOK(out, fmt.Sprintf("Business %d upgraded: %s.", businessID, upgrade))
+		},
+	})
+	return upgrades
+}
+
+func newBusinessReserveCmd(apiBase *string) *cobra.Command {
+	reserve := &cobra.Command{
+		Use:   "reserve",
+		Short: "Manage business reserve treasury",
+	}
+	reserve.AddCommand(&cobra.Command{
+		Use:   "deposit [business_id] [stonky]",
+		Short: "Move wallet cash into business reserve",
+		Args:  cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runReserveTransfer(cmd, apiBase, args, "deposit")
+		},
+	})
+	reserve.AddCommand(&cobra.Command{
+		Use:   "withdraw [business_id] [stonky]",
+		Short: "Withdraw cash from reserve to wallet",
+		Args:  cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runReserveTransfer(cmd, apiBase, args, "withdraw")
+		},
+	})
+	return reserve
+}
+
+func runReserveTransfer(cmd *cobra.Command, apiBase *string, args []string, direction string) error {
+	sess, err := cl.LoadSession()
+	if err != nil {
+		return fmt.Errorf("login required: %w", err)
+	}
+	businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+	if err != nil {
+		return err
+	}
+	amount := 0.0
+	if len(args) >= 2 {
+		amount, err = strconv.ParseFloat(strings.TrimSpace(args[1]), 64)
+		if err != nil || amount <= 0 {
+			return fmt.Errorf("amount must be a positive number")
+		}
+	} else {
+		amount, err = promptFloat("Amount (stonky)", 0)
+		if err != nil {
+			return err
+		}
+	}
+	amountMicros := game.StonkyToMicros(amount)
+	idem := uuid.NewString()
+	path := fmt.Sprintf("/v1/businesses/%d/reserve/%s", businessID, direction)
+	body := map[string]any{"amount_micros": amountMicros}
+	client := newClient(apiBase)
+	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+	defer cancel()
+	var out map[string]any
+	if direction == "deposit" {
+		out, err = client.BusinessReserveDeposit(ctx, sess.AccessToken, businessID, amountMicros, idem)
+	} else {
+		out, err = client.BusinessReserveWithdraw(ctx, sess.AccessToken, businessID, amountMicros, idem)
+	}
+	if err != nil {
+		return queueOnNetworkError(err, syncq.Command{
+			Method:         "POST",
+			Path:           path,
+			Body:           body,
+			IdempotencyKey: idem,
+		})
+	}
+	return renderSimpleOK(out, fmt.Sprintf("Business %d reserve %s: %s stonky.", businessID, direction, formatMicros(amountMicros)))
+}
+
+func newFundsCmd(apiBase *string) *cobra.Command {
+	funds := &cobra.Command{
+		Use:   "funds",
+		Short: "Mutual fund style baskets",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runFundsGuidedFlow(cmd, apiBase)
+		},
+	}
+	funds.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "List available funds and NAV",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.ListFunds(ctx, sess.AccessToken)
+			if err != nil {
+				return err
+			}
+			return renderFundsList(out)
+		},
+	})
+	funds.AddCommand(&cobra.Command{
+		Use:   "buy [fund_code] [shares]",
+		Short: "Buy fund units",
+		Args:  cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			code, qty, err := fundCodeAndQty(args)
+			if err != nil {
+				return err
+			}
+			units, err := game.SharesToUnits(qty)
+			if err != nil {
+				return err
+			}
+			idem := uuid.NewString()
+			path := fmt.Sprintf("/v1/funds/%s/buy", code)
+			body := map[string]any{"units": units}
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.BuyFund(ctx, sess.AccessToken, code, idem, units)
+			if err != nil {
+				return queueOnNetworkError(err, syncq.Command{
+					Method:         "POST",
+					Path:           path,
+					Body:           body,
+					IdempotencyKey: idem,
+				})
+			}
+			return renderSimpleOK(out, fmt.Sprintf("Bought %.4f units of %s.", qty, code))
+		},
+	})
+	funds.AddCommand(&cobra.Command{
+		Use:   "sell [fund_code] [shares]",
+		Short: "Sell fund units",
+		Args:  cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			code, qty, err := fundCodeAndQty(args)
+			if err != nil {
+				return err
+			}
+			units, err := game.SharesToUnits(qty)
+			if err != nil {
+				return err
+			}
+			idem := uuid.NewString()
+			path := fmt.Sprintf("/v1/funds/%s/sell", code)
+			body := map[string]any{"units": units}
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.SellFund(ctx, sess.AccessToken, code, idem, units)
+			if err != nil {
+				return queueOnNetworkError(err, syncq.Command{
+					Method:         "POST",
+					Path:           path,
+					Body:           body,
+					IdempotencyKey: idem,
+				})
+			}
+			return renderSimpleOK(out, fmt.Sprintf("Sold %.4f units of %s.", qty, code))
+		},
+	})
+	return funds
+}
+
+func fundCodeAndQty(args []string) (string, float64, error) {
+	code := ""
+	var qty float64
+	var err error
+	if len(args) >= 1 {
+		code = strings.ToUpper(strings.TrimSpace(args[0]))
+	} else {
+		code, err = promptChoice("Fund code", []string{"TECH6X", "CORE20", "VOLT10", "DIVMAX", "AIEDGE", "STABLE"}, "CORE20")
+		if err != nil {
+			return "", 0, err
+		}
+		code = strings.ToUpper(code)
+	}
+	if len(args) >= 2 {
+		qty, err = strconv.ParseFloat(strings.TrimSpace(args[1]), 64)
+		if err != nil || qty <= 0 {
+			return "", 0, fmt.Errorf("shares must be a positive number")
+		}
+	} else {
+		qty, err = promptFloat("Units", 0)
+		if err != nil {
+			return "", 0, err
+		}
+	}
+	return code, qty, nil
 }
 
 func newLeaderboardCmd(apiBase *string) *cobra.Command {

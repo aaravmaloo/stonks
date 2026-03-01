@@ -452,9 +452,6 @@ func newBusinessCmd(apiBase *string) *cobra.Command {
 		Use:     "business",
 		Short:   "Business management commands",
 		Aliases: []string{"bussin"},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBusinessGuidedFlow(cmd, apiBase)
-		},
 	}
 	business.AddCommand(newBusinessCreateCmd(apiBase))
 	business.AddCommand(newBusinessStateCmd(apiBase))
@@ -1460,9 +1457,6 @@ func newFundsCmd(apiBase *string) *cobra.Command {
 	funds := &cobra.Command{
 		Use:   "funds",
 		Short: "Mutual fund style baskets",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runFundsGuidedFlow(cmd, apiBase)
-		},
 	}
 	funds.AddCommand(&cobra.Command{
 		Use:   "list",

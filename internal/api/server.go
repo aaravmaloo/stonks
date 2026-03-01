@@ -84,11 +84,25 @@ func (s *Server) routes() {
 			r.Get("/businesses/{id}/employees", s.handleBusinessEmployees)
 			r.Get("/businesses/employees/candidates", s.handleEmployeeCandidates)
 			r.Post("/businesses/{id}/employees/hire", s.handleHireEmployee)
+			r.Post("/businesses/{id}/employees/{employee_id}/train", s.handleTrainProfessional)
+			r.Get("/businesses/{id}/machinery", s.handleBusinessMachinery)
+			r.Get("/businesses/{id}/loans", s.handleBusinessLoans)
+			r.Post("/businesses/{id}/machinery/buy", s.handleBuyMachinery)
+			r.Post("/businesses/{id}/loans/take", s.handleTakeBusinessLoan)
+			r.Post("/businesses/{id}/loans/repay", s.handleRepayBusinessLoan)
+			r.Post("/businesses/{id}/strategy", s.handleSetBusinessStrategy)
+			r.Post("/businesses/{id}/upgrades/buy", s.handleBuyBusinessUpgrade)
+			r.Post("/businesses/{id}/reserve/deposit", s.handleBusinessReserveDeposit)
+			r.Post("/businesses/{id}/reserve/withdraw", s.handleBusinessReserveWithdraw)
 			r.Post("/businesses/{id}/visibility", s.handleBusinessVisibility)
 			r.Post("/businesses/{id}/ipo", s.handleBusinessIPO)
+			r.Post("/businesses/{id}/sell", s.handleSellBusiness)
 
 			r.Post("/stocks/custom", s.handleCreateCustomStock)
 			r.Post("/stocks/{symbol}/ipo", s.handleIPOStock)
+			r.Get("/funds", s.handleFundsList)
+			r.Post("/funds/{code}/buy", s.handleFundBuy)
+			r.Post("/funds/{code}/sell", s.handleFundSell)
 
 			r.Get("/leaderboard/global", s.handleLeaderboardGlobal)
 			r.Get("/leaderboard/friends", s.handleLeaderboardFriends)
@@ -392,6 +406,345 @@ func (s *Server) handleHireEmployee(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+func (s *Server) handleTrainProfessional(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	employeeID, err := strconv.ParseInt(chi.URLParam(r, "employee_id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid employee id")
+		return
+	}
+	out, err := s.game.TrainProfessional(r.Context(), game.TrainProfessionalInput{
+		UserID:         user.UserID,
+		SeasonID:       seasonID,
+		BusinessID:     businessID,
+		EmployeeID:     employeeID,
+		IdempotencyKey: idempotencyKey(r),
+	})
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleBusinessMachinery(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	out, err := s.game.ListBusinessMachinery(r.Context(), user.UserID, seasonID, businessID)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"machinery": out})
+}
+
+func (s *Server) handleBusinessLoans(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	out, err := s.game.ListBusinessLoans(r.Context(), user.UserID, seasonID, businessID)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"loans": out})
+}
+
+func (s *Server) handleBuyMachinery(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	var in struct {
+		MachineType string `json:"machine_type"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.game.BuyBusinessMachinery(r.Context(), game.BuyMachineryInput{
+		UserID:         user.UserID,
+		SeasonID:       seasonID,
+		BusinessID:     businessID,
+		MachineType:    in.MachineType,
+		IdempotencyKey: idempotencyKey(r),
+	})
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleTakeBusinessLoan(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	var in struct {
+		AmountMicros int64 `json:"amount_micros"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.game.TakeBusinessLoan(r.Context(), game.BusinessLoanInput{
+		UserID:         user.UserID,
+		SeasonID:       seasonID,
+		BusinessID:     businessID,
+		AmountMicros:   in.AmountMicros,
+		IdempotencyKey: idempotencyKey(r),
+	})
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleRepayBusinessLoan(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	var in struct {
+		AmountMicros int64 `json:"amount_micros"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.game.RepayBusinessLoan(r.Context(), game.BusinessLoanInput{
+		UserID:         user.UserID,
+		SeasonID:       seasonID,
+		BusinessID:     businessID,
+		AmountMicros:   in.AmountMicros,
+		IdempotencyKey: idempotencyKey(r),
+	})
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleSetBusinessStrategy(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	var in struct {
+		Strategy string `json:"strategy"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.game.SetBusinessStrategy(r.Context(), game.BusinessStrategyInput{
+		UserID:         user.UserID,
+		SeasonID:       seasonID,
+		BusinessID:     businessID,
+		Strategy:       in.Strategy,
+		IdempotencyKey: idempotencyKey(r),
+	}); err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleBuyBusinessUpgrade(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	var in struct {
+		Upgrade string `json:"upgrade"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.game.BuyBusinessUpgrade(r.Context(), game.BusinessUpgradeInput{
+		UserID:         user.UserID,
+		SeasonID:       seasonID,
+		BusinessID:     businessID,
+		Upgrade:        in.Upgrade,
+		IdempotencyKey: idempotencyKey(r),
+	})
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleBusinessReserveDeposit(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	var in struct {
+		AmountMicros int64 `json:"amount_micros"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.game.BusinessReserveDeposit(r.Context(), game.BusinessReserveInput{
+		UserID:         user.UserID,
+		SeasonID:       seasonID,
+		BusinessID:     businessID,
+		AmountMicros:   in.AmountMicros,
+		IdempotencyKey: idempotencyKey(r),
+	}); err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleBusinessReserveWithdraw(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	var in struct {
+		AmountMicros int64 `json:"amount_micros"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.game.BusinessReserveWithdraw(r.Context(), game.BusinessReserveInput{
+		UserID:         user.UserID,
+		SeasonID:       seasonID,
+		BusinessID:     businessID,
+		AmountMicros:   in.AmountMicros,
+		IdempotencyKey: idempotencyKey(r),
+	}); err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) handleBusinessVisibility(w http.ResponseWriter, r *http.Request) {
 	user, err := userFromContext(r.Context())
 	if err != nil {
@@ -451,6 +804,30 @@ func (s *Server) handleBusinessIPO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleSellBusiness(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	out, err := s.game.SellBusinessToBank(r.Context(), user.UserID, seasonID, businessID, idempotencyKey(r))
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleCreateCustomStock(w http.ResponseWriter, r *http.Request) {
@@ -516,6 +893,61 @@ func (s *Server) handleIPOStock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleFundsList(w http.ResponseWriter, r *http.Request) {
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out, err := s.game.ListFunds(r.Context(), seasonID)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"funds": out})
+}
+
+func (s *Server) handleFundBuy(w http.ResponseWriter, r *http.Request) {
+	s.handleFundTrade("buy", w, r)
+}
+
+func (s *Server) handleFundSell(w http.ResponseWriter, r *http.Request) {
+	s.handleFundTrade("sell", w, r)
+}
+
+func (s *Server) handleFundTrade(side string, w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var in struct {
+		Units int64 `json:"units"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.game.TradeFund(r.Context(), game.FundOrderInput{
+		UserID:         user.UserID,
+		SeasonID:       seasonID,
+		FundCode:       chi.URLParam(r, "code"),
+		Side:           side,
+		Units:          in.Units,
+		IdempotencyKey: idempotencyKey(r),
+	})
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleLeaderboardGlobal(w http.ResponseWriter, r *http.Request) {

@@ -57,7 +57,7 @@ func LoadAPIFromEnv() (APIConfig, error) {
 
 func LoadCLIFromEnv() CLIConfig {
 	return CLIConfig{
-		APIBaseURL: strings.TrimRight(envDefault("STK_API_BASE_URL", "http://localhost:8080"), "/"),
+		APIBaseURL: strings.TrimRight(envDefault("STK_API_BASE_URL", "https://api-production-8943.up.railway.app"), "/"),
 	}
 }
 

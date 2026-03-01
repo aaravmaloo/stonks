@@ -125,10 +125,6 @@ func (s *Service) SeedDefaults(ctx context.Context, seasonID int64) error {
 	if err := s.db.QueryRow(ctx, `SELECT COUNT(1) FROM game.stocks WHERE season_id = $1`, seasonID).Scan(&count); err != nil {
 		return err
 	}
-	if count > 0 {
-		return nil
-	}
-
 	seed := []struct {
 		Symbol string
 		Name   string
@@ -162,38 +158,33 @@ func (s *Service) SeedDefaults(ctx context.Context, seasonID int64) error {
 	}
 	defer tx.Rollback(ctx)
 
-	for _, row := range seed {
-		_, err := tx.Exec(ctx, `
-			INSERT INTO game.stocks (season_id, symbol, display_name, listed_public, current_price_micros, anchor_price_micros, created_by_user_id)
-			VALUES ($1, $2, $3, true, $4, $4, NULL)
-		`, seasonID, row.Symbol, row.Name, row.Price)
-		if err != nil {
-			return err
+	if count == 0 {
+		for _, row := range seed {
+			_, err := tx.Exec(ctx, `
+				INSERT INTO game.stocks (season_id, symbol, display_name, listed_public, current_price_micros, anchor_price_micros, created_by_user_id)
+				VALUES ($1, $2, $3, true, $4, $4, NULL)
+			`, seasonID, row.Symbol, row.Name, row.Price)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
-	candidates := []struct {
-		Name    string
-		Role    string
-		Trait   string
-		Cost    int64
-		Revenue int64
-		RiskBps int32
-	}{
-		{"Maya Lee", "operator", "disciplined", 500 * MicrosPerStonky, 35 * MicrosPerStonky, 20},
-		{"Arun Vale", "engineer", "innovative", 800 * MicrosPerStonky, 55 * MicrosPerStonky, 40},
-		{"Iris Knox", "sales", "charismatic", 600 * MicrosPerStonky, 60 * MicrosPerStonky, 55},
-		{"Noah Pike", "finance", "conservative", 700 * MicrosPerStonky, 45 * MicrosPerStonky, 15},
-		{"Tara Sol", "product", "visionary", 900 * MicrosPerStonky, 75 * MicrosPerStonky, 70},
-		{"Kian Moss", "ops", "resilient", 550 * MicrosPerStonky, 42 * MicrosPerStonky, 25},
+	var candidateCount int
+	if err := tx.QueryRow(ctx, `SELECT COUNT(1) FROM game.employee_candidates WHERE season_id = $1`, seasonID).Scan(&candidateCount); err != nil {
+		return err
 	}
-	for _, c := range candidates {
-		_, err := tx.Exec(ctx, `
-			INSERT INTO game.employee_candidates (season_id, full_name, role, trait, hire_cost_micros, revenue_per_tick_micros, risk_bps)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
-		`, seasonID, c.Name, c.Role, c.Trait, c.Cost, c.Revenue, c.RiskBps)
-		if err != nil {
-			return err
+	if candidateCount < 50 {
+		candidates := candidatePool(50)
+		for i := candidateCount; i < len(candidates); i++ {
+			c := candidates[i]
+			_, err := tx.Exec(ctx, `
+				INSERT INTO game.employee_candidates (season_id, full_name, role, trait, hire_cost_micros, revenue_per_tick_micros, risk_bps)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+			`, seasonID, c.Name, c.Role, c.Trait, c.Cost, c.Revenue, c.RiskBps)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -250,11 +241,29 @@ func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) 
 	bRows, err := s.db.Query(ctx, `
 		SELECT b.id, b.name, b.visibility, b.is_listed,
 		       COUNT(be.id) AS employee_count,
-		       COALESCE(b.base_revenue_micros + SUM(be.revenue_per_tick_micros), b.base_revenue_micros) AS revenue
+		       COALESCE(b.base_revenue_micros + SUM(be.revenue_per_tick_micros), b.base_revenue_micros) AS revenue,
+		       COALESCE(m.machinery_count, 0) AS machinery_count,
+		       COALESCE(m.output_total, 0) AS machinery_output,
+		       COALESCE(m.upkeep_total, 0) AS machinery_upkeep,
+		       COALESCE(l.loan_outstanding, 0) AS loan_outstanding,
+		       b.strategy, b.marketing_level, b.rd_level, b.automation_level, b.compliance_level,
+		       b.brand_bps, b.operational_health_bps, b.cash_reserve_micros, b.last_event
 		FROM game.businesses b
 		LEFT JOIN game.business_employees be ON be.business_id = b.id
+		LEFT JOIN LATERAL (
+			SELECT COUNT(1) AS machinery_count,
+			       COALESCE(SUM(output_bonus_micros), 0) AS output_total,
+			       COALESCE(SUM(upkeep_micros), 0) AS upkeep_total
+			FROM game.business_machinery bm
+			WHERE bm.business_id = b.id AND bm.season_id = b.season_id
+		) m ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(SUM(outstanding_micros), 0) AS loan_outstanding
+			FROM game.business_loans bl
+			WHERE bl.business_id = b.id AND bl.season_id = b.season_id AND bl.status = 'open'
+		) l ON TRUE
 		WHERE b.owner_user_id = $1 AND b.season_id = $2
-		GROUP BY b.id
+		GROUP BY b.id, m.machinery_count, m.output_total, m.upkeep_total, l.loan_outstanding
 		ORDER BY b.id
 	`, userID, seasonID)
 	if err != nil {
@@ -263,16 +272,26 @@ func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) 
 	defer bRows.Close()
 	for bRows.Next() {
 		var v BusinessView
-		if err := bRows.Scan(&v.ID, &v.Name, &v.Visibility, &v.IsListed, &v.EmployeeCount, &v.RevenuePerTickMicros); err != nil {
+		if err := bRows.Scan(
+			&v.ID, &v.Name, &v.Visibility, &v.IsListed, &v.EmployeeCount, &v.RevenuePerTickMicros,
+			&v.MachineryCount, &v.MachineryOutputMicros, &v.MachineryUpkeepMicros, &v.LoanOutstandingMicros,
+			&v.Strategy, &v.MarketingLevel, &v.RDLevel, &v.AutomationLevel, &v.ComplianceLevel,
+			&v.BrandBps, &v.OperationalHealthBps, &v.CashReserveMicros, &v.LastEvent,
+		); err != nil {
 			return out, err
 		}
+		v.RevenuePerTickMicros = v.RevenuePerTickMicros + v.MachineryOutputMicros - v.MachineryUpkeepMicros
 		out.Businesses = append(out.Businesses, v)
 	}
 	if err := bRows.Err(); err != nil {
 		return out, err
 	}
 
-	out.NetWorthMicros = out.BalanceMicros + holdings
+	fundHoldings, err := s.estimateFundHoldingsMicros(ctx, userID, seasonID)
+	if err != nil {
+		return out, err
+	}
+	out.NetWorthMicros = out.BalanceMicros + holdings + fundHoldings
 	return out, nil
 }
 
@@ -514,12 +533,36 @@ func (s *Service) BusinessState(ctx context.Context, userID string, seasonID, bu
 	err := s.db.QueryRow(ctx, `
 		SELECT b.id, b.name, b.visibility, b.is_listed,
 		       COUNT(be.id),
-		       COALESCE(b.base_revenue_micros + SUM(be.revenue_per_tick_micros), b.base_revenue_micros)
+		       COALESCE(b.base_revenue_micros + SUM(be.revenue_per_tick_micros), b.base_revenue_micros),
+		       COALESCE(m.machinery_count, 0),
+		       COALESCE(m.output_total, 0),
+		       COALESCE(m.upkeep_total, 0),
+		       COALESCE(l.loan_outstanding, 0),
+		       b.strategy, b.marketing_level, b.rd_level, b.automation_level, b.compliance_level,
+		       b.brand_bps, b.operational_health_bps, b.cash_reserve_micros, b.last_event
 		FROM game.businesses b
 		LEFT JOIN game.business_employees be ON be.business_id = b.id
+		LEFT JOIN LATERAL (
+			SELECT COUNT(1) AS machinery_count,
+			       COALESCE(SUM(output_bonus_micros), 0) AS output_total,
+			       COALESCE(SUM(upkeep_micros), 0) AS upkeep_total
+			FROM game.business_machinery bm
+			WHERE bm.business_id = b.id AND bm.season_id = b.season_id
+		) m ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(SUM(outstanding_micros), 0) AS loan_outstanding
+			FROM game.business_loans bl
+			WHERE bl.business_id = b.id AND bl.season_id = b.season_id AND bl.status = 'open'
+		) l ON TRUE
 		WHERE b.id = $1 AND b.season_id = $2 AND b.owner_user_id = $3
-		GROUP BY b.id
-	`, businessID, seasonID, userID).Scan(&out.ID, &out.Name, &out.Visibility, &out.IsListed, &out.EmployeeCount, &out.RevenuePerTickMicros)
+		GROUP BY b.id, m.machinery_count, m.output_total, m.upkeep_total, l.loan_outstanding
+	`, businessID, seasonID, userID).Scan(
+		&out.ID, &out.Name, &out.Visibility, &out.IsListed, &out.EmployeeCount, &out.RevenuePerTickMicros,
+		&out.MachineryCount, &out.MachineryOutputMicros, &out.MachineryUpkeepMicros, &out.LoanOutstandingMicros,
+		&out.Strategy, &out.MarketingLevel, &out.RDLevel, &out.AutomationLevel, &out.ComplianceLevel,
+		&out.BrandBps, &out.OperationalHealthBps, &out.CashReserveMicros, &out.LastEvent,
+	)
+	out.RevenuePerTickMicros = out.RevenuePerTickMicros + out.MachineryOutputMicros - out.MachineryUpkeepMicros
 	return out, err
 }
 
@@ -1099,7 +1142,10 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 		}
 	}
 
-	if err := applyBusinessRevenueTx(ctx, tx, seasonID); err != nil {
+	if err := applyBusinessRevenueTx(ctx, tx, seasonID, s.nextFloat); err != nil {
+		return err
+	}
+	if err := applyBusinessLoanConsequencesTx(ctx, tx, seasonID); err != nil {
 		return err
 	}
 	if err := applyDebtInterestTx(ctx, tx, seasonID, tickEvery, interestAPR); err != nil {
@@ -1166,51 +1212,458 @@ func applyDebtInterestTx(ctx context.Context, tx pgx.Tx, seasonID int64, tickEve
 	return nil
 }
 
-func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64) error {
+func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, nextFloat func() float64) error {
 	rows, err := tx.Query(ctx, `
-		SELECT b.owner_user_id,
-		       COALESCE(SUM(b.base_revenue_micros + be_sum.employee_revenue), SUM(b.base_revenue_micros)) AS total_revenue
+		SELECT b.id,
+		       b.owner_user_id,
+		       b.base_revenue_micros,
+		       b.visibility,
+		       b.is_listed,
+		       b.strategy,
+		       b.marketing_level,
+		       b.rd_level,
+		       b.automation_level,
+		       b.compliance_level,
+		       b.brand_bps,
+		       b.operational_health_bps,
+		       b.cash_reserve_micros,
+		       COALESCE(be.employee_revenue, 0) AS employee_revenue,
+		       COALESCE(be.employee_count, 0) AS employee_count,
+		       COALESCE(be.avg_risk_bps, 0) AS avg_risk_bps,
+		       COALESCE(m.output_bonus, 0) AS machine_output,
+		       COALESCE(m.upkeep, 0) AS machine_upkeep,
+		       COALESCE(l.loan_interest, 0) AS loan_interest
 		FROM game.businesses b
 		LEFT JOIN LATERAL (
-			SELECT COALESCE(SUM(be.revenue_per_tick_micros), 0) AS employee_revenue
+			SELECT COALESCE(SUM(be.revenue_per_tick_micros), 0) AS employee_revenue,
+			       COUNT(1) AS employee_count,
+			       COALESCE(AVG(be.risk_bps), 0) AS avg_risk_bps
 			FROM game.business_employees be
 			WHERE be.business_id = b.id
-		) be_sum ON TRUE
+		) be ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(SUM(bm.output_bonus_micros), 0) AS output_bonus,
+			       COALESCE(SUM(bm.upkeep_micros), 0) AS upkeep
+			FROM game.business_machinery bm
+			WHERE bm.business_id = b.id AND bm.season_id = b.season_id
+		) m ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(SUM((bl.outstanding_micros * bl.interest_bps) / 10000), 0) AS loan_interest
+			FROM game.business_loans bl
+			WHERE bl.business_id = b.id AND bl.season_id = b.season_id AND bl.status = 'open'
+		) l ON TRUE
 		WHERE b.season_id = $1
-		GROUP BY b.owner_user_id
 	`, seasonID)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	type gain struct {
-		userID  string
-		revenue int64
+	type businessCycle struct {
+		businessID      int64
+		userID          string
+		baseRevenue     int64
+		visibility      string
+		isListed        bool
+		strategy        string
+		marketingLevel  int32
+		rdLevel         int32
+		automationLevel int32
+		complianceLevel int32
+		brandBps        int32
+		healthBps       int32
+		reserveMicros   int64
+		employeeRevenue int64
+		employeeCount   int64
+		avgRiskBps      float64
+		machineOutput   int64
+		machineUpkeep   int64
+		loanInterest    int64
 	}
-	var gains []gain
+	cycles := make([]businessCycle, 0)
 	for rows.Next() {
-		var g gain
-		if err := rows.Scan(&g.userID, &g.revenue); err != nil {
+		var c businessCycle
+		if err := rows.Scan(
+			&c.businessID, &c.userID, &c.baseRevenue,
+			&c.visibility, &c.isListed, &c.strategy, &c.marketingLevel, &c.rdLevel, &c.automationLevel, &c.complianceLevel,
+			&c.brandBps, &c.healthBps, &c.reserveMicros,
+			&c.employeeRevenue, &c.employeeCount, &c.avgRiskBps,
+			&c.machineOutput, &c.machineUpkeep, &c.loanInterest,
+		); err != nil {
 			return err
 		}
-		if g.revenue > 0 {
-			gains = append(gains, g)
-		}
+		cycles = append(cycles, c)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for _, g := range gains {
+
+	netByUser := map[string]int64{}
+	for _, c := range cycles {
+		empEfficiency := 1.0
+		if c.employeeCount > 12 {
+			empEfficiency -= float64(c.employeeCount-12) * 0.015
+			if empEfficiency < 0.55 {
+				empEfficiency = 0.55
+			}
+		}
+		employeeRevenue := int64(math.Round(float64(c.employeeRevenue) * empEfficiency))
+
+		autoBoost := 1.0 + float64(c.automationLevel)*0.03
+		marketingBoost := 1.0 + float64(c.marketingLevel)*0.02
+		rdBoost := 1.0 + float64(c.rdLevel)*0.015
+		brandBoost := float64(c.brandBps) / 10000.0
+		healthBoost := float64(c.healthBps) / 10000.0
+
+		upkeepCut := float64(c.automationLevel) * 0.015
+		if upkeepCut > 0.35 {
+			upkeepCut = 0.35
+		}
+		machineOutput := int64(math.Round(float64(c.machineOutput) * autoBoost))
+		machineUpkeep := int64(math.Round(float64(c.machineUpkeep) * (1 - upkeepCut)))
+
+		gross := c.baseRevenue + employeeRevenue + machineOutput - machineUpkeep
+		gross = int64(math.Round(float64(gross) * marketingBoost * rdBoost * brandBoost * healthBoost))
+
+		if c.visibility == "public" {
+			gross = int64(math.Round(float64(gross) * 1.03))
+		}
+		if c.isListed {
+			gross = int64(math.Round(float64(gross) * 1.04))
+		}
+		switch c.strategy {
+		case "aggressive":
+			gross = int64(math.Round(float64(gross) * 1.12))
+		case "defensive":
+			gross = int64(math.Round(float64(gross) * 0.92))
+		}
+
+		riskFactor := c.avgRiskBps / 10000.0
+		compShield := 1.0 - math.Min(0.40, float64(c.complianceLevel)*0.02)
+		strategyRisk := 1.0
+		if c.strategy == "aggressive" {
+			strategyRisk = 1.2
+		}
+		if c.strategy == "defensive" {
+			strategyRisk = 0.75
+		}
+		riskPenalty := int64(math.Round(float64(gross) * riskFactor * 0.30 * compShield * strategyRisk))
+
+		upgradeBurn := int64((int64(c.marketingLevel) + int64(c.rdLevel) + int64(c.automationLevel) + int64(c.complianceLevel)) * 3 * MicrosPerStonky)
+
+		eventTag := ""
+		p := nextFloat()
+		viralChance := 0.020 + float64(c.marketingLevel)*0.0012
+		crisisChance := 0.018 + riskFactor*0.07
+		if p < viralChance {
+			bonus := int64(math.Round(float64(gross) * (0.08 + nextFloat()*0.15)))
+			gross += bonus
+			eventTag = "viral_breakout"
+			if _, err := tx.Exec(ctx, `
+				UPDATE game.businesses
+				SET brand_bps = LEAST(20000, brand_bps + $1), operational_health_bps = LEAST(15000, operational_health_bps + $2), last_event = $3, updated_at = now()
+				WHERE id = $4 AND season_id = $5
+			`, 240, 120, eventTag, c.businessID, seasonID); err != nil {
+				return err
+			}
+		} else if p < viralChance+crisisChance {
+			hit := int64(math.Round(float64(gross) * (0.10 + nextFloat()*0.20)))
+			gross -= hit
+			if gross < 0 {
+				gross = 0
+			}
+			eventTag = "pr_crisis"
+			if _, err := tx.Exec(ctx, `
+				UPDATE game.businesses
+				SET brand_bps = GREATEST(5000, brand_bps - $1), operational_health_bps = GREATEST(5000, operational_health_bps - $2), last_event = $3, updated_at = now()
+				WHERE id = $4 AND season_id = $5
+			`, 280, 220, eventTag, c.businessID, seasonID); err != nil {
+				return err
+			}
+		} else {
+			if _, err := tx.Exec(ctx, `
+				UPDATE game.businesses
+				SET brand_bps = CASE WHEN $1 > 0 THEN LEAST(20000, brand_bps + 20) ELSE GREATEST(5000, brand_bps - 10) END,
+				    operational_health_bps = CASE WHEN $1 > 0 THEN LEAST(15000, operational_health_bps + 15) ELSE GREATEST(5000, operational_health_bps - 18) END,
+				    last_event = '',
+				    updated_at = now()
+				WHERE id = $2 AND season_id = $3
+			`, gross, c.businessID, seasonID); err != nil {
+				return err
+			}
+		}
+
+		if c.strategy == "aggressive" && nextFloat() < (0.025+riskFactor*0.04) {
+			if _, err := tx.Exec(ctx, `
+				UPDATE game.business_employees
+				SET revenue_per_tick_micros = GREATEST($1, ROUND(revenue_per_tick_micros::numeric * 0.96)),
+				    risk_bps = LEAST(10000, risk_bps + 80)
+				WHERE id = (
+					SELECT id
+					FROM game.business_employees
+					WHERE season_id = $2 AND business_id = $3
+					ORDER BY random()
+					LIMIT 1
+				)
+			`, 5*MicrosPerStonky, seasonID, c.businessID); err != nil {
+				return err
+			}
+		}
+
+		if c.brandBps < 8200 && c.employeeCount > 0 && nextFloat() < 0.015 {
+			if _, err := tx.Exec(ctx, `
+				DELETE FROM game.business_employees
+				WHERE id = (
+					SELECT id
+					FROM game.business_employees
+					WHERE season_id = $1 AND business_id = $2
+					ORDER BY random()
+					LIMIT 1
+				)
+			`, seasonID, c.businessID); err != nil {
+				return err
+			}
+		}
+
+		reserveYield := int64(math.Round(float64(c.reserveMicros) * (0.00025 + float64(c.rdLevel)*0.00003)))
+		if reserveYield > 0 {
+			if _, err := tx.Exec(ctx, `
+				UPDATE game.businesses
+				SET cash_reserve_micros = cash_reserve_micros + $1, updated_at = now()
+				WHERE id = $2 AND season_id = $3
+			`, reserveYield, c.businessID, seasonID); err != nil {
+				return err
+			}
+		}
+
+		net := gross - riskPenalty - c.loanInterest - upgradeBurn + reserveYield
+		if net < 0 && c.reserveMicros > 0 {
+			cover := -net
+			if cover > c.reserveMicros {
+				cover = c.reserveMicros
+			}
+			net += cover
+			if _, err := tx.Exec(ctx, `
+				UPDATE game.businesses
+				SET cash_reserve_micros = cash_reserve_micros - $1, updated_at = now()
+				WHERE id = $2 AND season_id = $3
+			`, cover, c.businessID, seasonID); err != nil {
+				return err
+			}
+		}
+		netByUser[c.userID] += net
+	}
+
+	for userID, delta := range netByUser {
+		if delta == 0 {
+			continue
+		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE game.wallets
 			SET balance_micros = balance_micros + $1,
 			    updated_at = now()
 			WHERE season_id = $2 AND user_id = $3
-		`, g.revenue, seasonID, g.userID); err != nil {
+		`, delta, seasonID, userID); err != nil {
 			return err
 		}
-		if err := appendLedgerEntries(ctx, tx, g.userID, seasonID, "business_revenue", g.revenue, 0); err != nil {
+		if delta > 0 {
+			if err := appendLedgerEntries(ctx, tx, userID, seasonID, "business_revenue", delta, 0); err != nil {
+				return err
+			}
+		} else {
+			if err := appendWalletDeltaEntry(ctx, tx, userID, seasonID, delta, "business_cycle_loss", map[string]any{
+				"season_id": seasonID,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE game.business_loans
+		SET outstanding_micros = outstanding_micros + ((outstanding_micros * interest_bps) / 10000),
+		    updated_at = now()
+		WHERE season_id = $1 AND status = 'open' AND outstanding_micros > 0
+	`, seasonID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func applyBusinessLoanConsequencesTx(ctx context.Context, tx pgx.Tx, seasonID int64) error {
+	rows, err := tx.Query(ctx, `
+		SELECT business_id, owner_user_id, COALESCE(SUM(outstanding_micros), 0) AS outstanding
+		FROM game.business_loans
+		WHERE season_id = $1 AND status = 'open'
+		GROUP BY business_id, owner_user_id
+	`, seasonID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type item struct {
+		businessID  int64
+		userID      string
+		outstanding int64
+	}
+	items := make([]item, 0)
+	for rows.Next() {
+		var it item
+		if err := rows.Scan(&it.businessID, &it.userID, &it.outstanding); err != nil {
 			return err
+		}
+		if it.outstanding > 0 {
+			items = append(items, it)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, it := range items {
+		due := it.outstanding / 50 // 2% auto debt service
+		minDue := int64(250) * MicrosPerStonky
+		if due < minDue {
+			due = minDue
+		}
+		var balance int64
+		if err := tx.QueryRow(ctx, `
+			SELECT balance_micros
+			FROM game.wallets
+			WHERE season_id = $1 AND user_id = $2
+			FOR UPDATE
+		`, seasonID, it.userID).Scan(&balance); err != nil {
+			return err
+		}
+
+		if balance >= due {
+			remaining := due
+			loanRows, err := tx.Query(ctx, `
+				SELECT id, outstanding_micros
+				FROM game.business_loans
+				WHERE season_id = $1 AND business_id = $2 AND status = 'open'
+				ORDER BY id
+				FOR UPDATE
+			`, seasonID, it.businessID)
+			if err != nil {
+				return err
+			}
+			type loan struct {
+				id          int64
+				outstanding int64
+			}
+			loans := make([]loan, 0)
+			for loanRows.Next() {
+				var l loan
+				if err := loanRows.Scan(&l.id, &l.outstanding); err != nil {
+					loanRows.Close()
+					return err
+				}
+				loans = append(loans, l)
+			}
+			loanRows.Close()
+			for _, l := range loans {
+				if remaining <= 0 {
+					break
+				}
+				pay := l.outstanding
+				if pay > remaining {
+					pay = remaining
+				}
+				next := l.outstanding - pay
+				status := "open"
+				if next == 0 {
+					status = "repaid"
+				}
+				if _, err := tx.Exec(ctx, `
+					UPDATE game.business_loans
+					SET outstanding_micros = $1,
+					    status = $2,
+					    missed_ticks = 0,
+					    updated_at = now()
+					WHERE id = $3
+				`, next, status, l.id); err != nil {
+					return err
+				}
+				remaining -= pay
+			}
+			balance -= due
+			if _, err := tx.Exec(ctx, `
+				UPDATE game.wallets
+				SET balance_micros = $1, updated_at = now()
+				WHERE season_id = $2 AND user_id = $3
+			`, balance, seasonID, it.userID); err != nil {
+				return err
+			}
+			if err := appendLedgerEntries(ctx, tx, it.userID, seasonID, "business_loan_payment", due, 0); err != nil {
+				return err
+			}
+			continue
+		}
+
+		lateFee := it.outstanding / 100 // 1% late fee
+		minLate := int64(150) * MicrosPerStonky
+		if lateFee < minLate {
+			lateFee = minLate
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE game.wallets
+			SET balance_micros = balance_micros - $1, updated_at = now()
+			WHERE season_id = $2 AND user_id = $3
+		`, lateFee, seasonID, it.userID); err != nil {
+			return err
+		}
+		if err := appendLedgerEntries(ctx, tx, it.userID, seasonID, "business_loan_late_fee", lateFee, 0); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE game.business_loans
+			SET missed_ticks = missed_ticks + 1, updated_at = now()
+			WHERE season_id = $1 AND business_id = $2 AND status = 'open'
+		`, seasonID, it.businessID); err != nil {
+			return err
+		}
+
+		var missed int32
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(MAX(missed_ticks), 0)
+			FROM game.business_loans
+			WHERE season_id = $1 AND business_id = $2 AND status = 'open'
+		`, seasonID, it.businessID).Scan(&missed); err != nil {
+			return err
+		}
+
+		if missed >= 5 {
+			if _, err := tx.Exec(ctx, `
+				DELETE FROM game.business_machinery
+				WHERE season_id = $1 AND business_id = $2
+			`, seasonID, it.businessID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE game.business_employees
+				SET revenue_per_tick_micros = GREATEST($1, ROUND(revenue_per_tick_micros::numeric * 0.65)),
+				    risk_bps = LEAST(10000, risk_bps + 300)
+				WHERE season_id = $2 AND business_id = $3
+			`, 5*MicrosPerStonky, seasonID, it.businessID); err != nil {
+				return err
+			}
+		}
+
+		if missed >= 9 {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO game.business_sale_history
+				    (business_id, season_id, owner_user_id, gross_valuation_micros, adjustment_factor, loan_payoff_micros, payout_micros)
+				VALUES
+				    ($1, $2, $3, 0, 0, $4, 0)
+			`, it.businessID, seasonID, it.userID, it.outstanding); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
+				DELETE FROM game.businesses
+				WHERE id = $1 AND season_id = $2
+			`, it.businessID, seasonID); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -1422,7 +1875,11 @@ func appendLedgerEntries(ctx context.Context, tx pgx.Tx, userID string, seasonID
 	txID := uuid.NewString()
 	debit := -amountMicros
 	credit := amountMicros
-	if action == "sell" || action == "business_revenue" {
+	if action == "sell" ||
+		action == "business_revenue" ||
+		action == "business_loan_draw" ||
+		action == "business_sale" ||
+		action == "fund_sell" {
 		debit, credit = credit, debit
 	}
 	meta, _ := json.Marshal(map[string]any{"action": action})

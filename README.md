@@ -31,17 +31,29 @@ Stanks is a true CLI stock sandbox game written in Go.
    - `stk business create "Acme Labs"` (then choose visibility in prompt)
    - `stk business visibility <id> public`
    - `stk business ipo <id>` (then enter symbol and price in prompts)
-6. Hire employees for business revenue:
+6. Hire and train professionals for business revenue:
    - `stk business employees candidates`
    - `stk business employees hire <business_id> <candidate_id>`
-7. Create and list your own stock:
+   - `stk business employees train <business_id> <employee_id>`
+7. Scale with machines and financing:
+   - `stk business machinery buy <business_id> assembly_line`
+   - `stk business loans list <business_id>`
+   - `stk business loans take <business_id> 50000`
+   - `stk business loans repay <business_id> 10000`
+8. Diversify with mutual funds:
+   - `stk funds list`
+   - `stk funds buy CORE20 10`
+   - `stk funds sell TECH6X 2`
+9. Exit a company via bank buyout:
+   - `stk business sell <business_id>`
+10. Create and list your own stock:
    - `stk stocks create ACMELB` (then enter display name and business id in prompts)
    - `stk stocks ipo ACMELB` (then enter price in prompt)
-8. Follow players and compare rankings:
+11. Follow players and compare rankings:
    - `stk friends add <invite_code>`
    - `stk leaderboard global`
    - `stk leaderboard friends`
-9. Replay offline writes:
+12. Replay offline writes:
    - `stk sync`
 
 ## Game rules and constraints
@@ -74,7 +86,15 @@ Then:
 
 Economy tick also applies:
 
-- Business revenue credits to owner wallets.
+- Business revenue credits/debits to owner wallets, now including:
+  - Professional risk drag
+  - Machinery output + machinery upkeep
+  - Business-loan interest accrual
+  - Auto debt servicing every tick (2% of outstanding, floor 250 stonky)
+  - Late fees when due amount cannot be paid
+  - Delinquency consequences:
+    - `>=5` missed ticks: machinery repossession + employee productivity haircut
+    - `>=9` missed ticks: forced liquidation (business closed, payout 0)
 - Debt interest accrual on negative balances (APR configurable, default `18%`).
 
 ## Anti-exploit safety model
@@ -96,6 +116,9 @@ Economy tick also applies:
 - `internal/game`: gameplay engine.
 - `internal/api`: HTTP handlers + auth middleware.
 - `migrations/0001_init.sql`: core DB schema.
+- `migrations/0002_business_expansion.sql`: machinery, loans, bank-sale history, fund positions.
+- `migrations/0003_loan_consequences.sql`: delinquency tracking column for loan consequences.
+- `migrations/0004_business_depth.sql`: strategy/upgrades/brand/health/reserve columns.
 
 ## Local setup
 
@@ -131,6 +154,9 @@ Apply SQL file:
 
 ```bash
 psql "$DATABASE_URL" -f migrations/0001_init.sql
+psql "$DATABASE_URL" -f migrations/0002_business_expansion.sql
+psql "$DATABASE_URL" -f migrations/0003_loan_consequences.sql
+psql "$DATABASE_URL" -f migrations/0004_business_depth.sql
 ```
 
 ### Run services
@@ -171,15 +197,56 @@ Alias:
 
 - `stk stock ...` works as alias for `stk stocks`.
 
+### Funds
+
+- `stk funds` (guided flow; prompts action and inputs)
+- `stk funds list`
+- `stk funds buy [TECH6X|CORE20|VOLT10|DIVMAX|AIEDGE|STABLE] [shares]`
+- `stk funds sell [TECH6X|CORE20|VOLT10|DIVMAX|AIEDGE|STABLE] [shares]`
+
 ### Business
 
+- `stk business` (guided flow; prompts action and inputs)
 - `stk business create [name]` (interactive visibility prompt)
 - `stk business state [business_id]`
 - `stk business visibility [business_id] [private|public]`
 - `stk business ipo [business_id]` (interactive symbol + price prompts)
+- `stk business sell [business_id]`
 - `stk business employees list [business_id]`
 - `stk business employees candidates`
 - `stk business employees hire [business_id] [candidate_id]`
+- `stk business employees train [business_id] [employee_id]`
+- `stk business machinery list [business_id]`
+- `stk business machinery buy [business_id] [machine_type]`
+- `stk business loans take [business_id] [stonky]`
+- `stk business loans repay [business_id] [stonky]`
+- `stk business loans list [business_id]`
+- `stk business strategy [business_id] [aggressive|balanced|defensive]`
+- `stk business upgrades buy [business_id] [marketing|rd|automation|compliance]`
+- `stk business reserve deposit [business_id] [stonky]`
+- `stk business reserve withdraw [business_id] [stonky]`
+
+### Business depth mechanics
+
+- Strategy modes with different risk/reward profiles.
+- Upgrade tree (`marketing`, `rd`, `automation`, `compliance`) with escalating costs.
+- Cash reserve treasury per business.
+- Reserve yield per tick (higher with R&D levels).
+- Reserve auto-shield when business cycle turns negative.
+- Brand score and operational-health score affect revenue multipliers.
+- Public visibility bonus and listed-company prestige bonus.
+- Employee diminishing returns at high headcount.
+- Upgrade burn-rate operating costs each tick.
+- Aggressive-mode burnout chance reducing employee output.
+- Low-brand poaching chance (random employee attrition).
+- Viral breakout events boosting brand, health, and tick revenue.
+- PR crisis events reducing brand, health, and tick revenue.
+- Compliance reduces effective risk penalty.
+- Automation boosts machine output and lowers upkeep.
+- Marketing and R&D revenue multipliers.
+- Loan payment auto-debit each tick.
+- Missed-loan late fees and delinquency tracking.
+- Delinquency escalation: repossession/productivity haircut/forced liquidation.
 
 Alias:
 
@@ -224,3 +291,4 @@ Current test coverage includes:
 - This repo assumes online-first gameplay; local queue is best-effort retry.
 - Email verification behavior follows Supabase project auth configuration.
 - Production ops details are in `deploy.md`.
+- Business candidate pool now seeds up to 50 professionals per season.

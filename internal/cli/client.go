@@ -122,6 +122,86 @@ func (c *Client) HireEmployee(ctx context.Context, accessToken string, businessI
 	return out, err
 }
 
+func (c *Client) TrainProfessional(ctx context.Context, accessToken string, businessID, employeeID int64, idem string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/employees/%d/train", businessID, employeeID), accessToken, map[string]any{}, &out, idem)
+	return out, err
+}
+
+func (c *Client) ListBusinessMachinery(ctx context.Context, accessToken string, businessID int64) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodGet, fmt.Sprintf("/v1/businesses/%d/machinery", businessID), accessToken, nil, &out, "")
+	return out, err
+}
+
+func (c *Client) ListBusinessLoans(ctx context.Context, accessToken string, businessID int64) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodGet, fmt.Sprintf("/v1/businesses/%d/loans", businessID), accessToken, nil, &out, "")
+	return out, err
+}
+
+func (c *Client) BuyBusinessMachinery(ctx context.Context, accessToken string, businessID int64, machineType, idem string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/machinery/buy", businessID), accessToken, map[string]any{
+		"machine_type": machineType,
+	}, &out, idem)
+	return out, err
+}
+
+func (c *Client) TakeBusinessLoan(ctx context.Context, accessToken string, businessID int64, amountMicros int64, idem string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/loans/take", businessID), accessToken, map[string]any{
+		"amount_micros": amountMicros,
+	}, &out, idem)
+	return out, err
+}
+
+func (c *Client) RepayBusinessLoan(ctx context.Context, accessToken string, businessID int64, amountMicros int64, idem string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/loans/repay", businessID), accessToken, map[string]any{
+		"amount_micros": amountMicros,
+	}, &out, idem)
+	return out, err
+}
+
+func (c *Client) SetBusinessStrategy(ctx context.Context, accessToken string, businessID int64, strategy, idem string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/strategy", businessID), accessToken, map[string]any{
+		"strategy": strategy,
+	}, &out, idem)
+	return out, err
+}
+
+func (c *Client) BuyBusinessUpgrade(ctx context.Context, accessToken string, businessID int64, upgrade, idem string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/upgrades/buy", businessID), accessToken, map[string]any{
+		"upgrade": upgrade,
+	}, &out, idem)
+	return out, err
+}
+
+func (c *Client) BusinessReserveDeposit(ctx context.Context, accessToken string, businessID int64, amountMicros int64, idem string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/reserve/deposit", businessID), accessToken, map[string]any{
+		"amount_micros": amountMicros,
+	}, &out, idem)
+	return out, err
+}
+
+func (c *Client) BusinessReserveWithdraw(ctx context.Context, accessToken string, businessID int64, amountMicros int64, idem string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/reserve/withdraw", businessID), accessToken, map[string]any{
+		"amount_micros": amountMicros,
+	}, &out, idem)
+	return out, err
+}
+
+func (c *Client) SellBusinessToBank(ctx context.Context, accessToken string, businessID int64, idem string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/sell", businessID), accessToken, map[string]any{}, &out, idem)
+	return out, err
+}
+
 func (c *Client) BusinessIPO(ctx context.Context, accessToken string, businessID int64, symbol string, priceMicros int64, idem string) (map[string]any, error) {
 	var out map[string]any
 	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/ipo", businessID), accessToken, map[string]any{
@@ -145,6 +225,28 @@ func (c *Client) IPOStock(ctx context.Context, accessToken, symbol string, price
 	var out map[string]any
 	err := c.jsonRequest(ctx, http.MethodPost, "/v1/stocks/"+url.PathEscape(symbol)+"/ipo", accessToken, map[string]any{
 		"price_micros": priceMicros,
+	}, &out, idem)
+	return out, err
+}
+
+func (c *Client) ListFunds(ctx context.Context, accessToken string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodGet, "/v1/funds", accessToken, nil, &out, "")
+	return out, err
+}
+
+func (c *Client) BuyFund(ctx context.Context, accessToken, fundCode, idem string, units int64) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, "/v1/funds/"+url.PathEscape(fundCode)+"/buy", accessToken, map[string]any{
+		"units": units,
+	}, &out, idem)
+	return out, err
+}
+
+func (c *Client) SellFund(ctx context.Context, accessToken, fundCode, idem string, units int64) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, "/v1/funds/"+url.PathEscape(fundCode)+"/sell", accessToken, map[string]any{
+		"units": units,
 	}, &out, idem)
 	return out, err
 }

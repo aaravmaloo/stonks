@@ -35,6 +35,18 @@ type businessEmployeesPayload struct {
 	Employees []businessEmployee `json:"employees"`
 }
 
+type machineryPayload struct {
+	Machinery []businessMachine `json:"machinery"`
+}
+
+type fundsPayload struct {
+	Funds []fundView `json:"funds"`
+}
+
+type loansPayload struct {
+	Loans []businessLoan `json:"loans"`
+}
+
 type leaderboardPayload struct {
 	Rows []game.LeaderboardRow `json:"rows"`
 }
@@ -61,6 +73,33 @@ type businessEmployee struct {
 	RevenuePerTickMicros int64     `json:"revenue_per_tick_micros"`
 	RiskBps              int32     `json:"risk_bps"`
 	CreatedAt            time.Time `json:"created_at"`
+}
+
+type businessMachine struct {
+	ID                int64     `json:"id"`
+	MachineType       string    `json:"machine_type"`
+	Level             int32     `json:"level"`
+	OutputBonusMicros int64     `json:"output_bonus_micros"`
+	UpkeepMicros      int64     `json:"upkeep_micros"`
+	ReliabilityBps    int32     `json:"reliability_bps"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+type fundView struct {
+	Code       string   `json:"code"`
+	Components []string `json:"components"`
+	NavMicros  int64    `json:"nav_micros"`
+}
+
+type businessLoan struct {
+	ID                int64     `json:"id"`
+	PrincipalMicros   int64     `json:"principal_micros"`
+	OutstandingMicros int64     `json:"outstanding_micros"`
+	InterestBps       int32     `json:"interest_bps"`
+	MissedTicks       int32     `json:"missed_ticks"`
+	Status            string    `json:"status"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 func printSuccess(msg string) {
@@ -231,19 +270,24 @@ func renderDashboard(raw map[string]any) error {
 	if len(d.Businesses) == 0 {
 		printInfo("No businesses yet.")
 	} else {
-		fmt.Printf("%-6s %-24s %-9s %-8s %10s %16s\n", "ID", "NAME", "VISIBILITY", "LISTED", "EMPLOYEES", "REV/TICK")
+		fmt.Printf("%-6s %-20s %-9s %-8s %-10s %10s %8s %12s %12s %12s %10s\n", "ID", "NAME", "VISIBILITY", "LISTED", "STRATEGY", "EMPLOYEES", "MACH", "REV/TICK", "UPKEEP", "LOANS", "RESERVE")
 		for _, b := range d.Businesses {
 			listed := "no"
 			if b.IsListed {
 				listed = "yes"
 			}
-			fmt.Printf("%-6d %-24s %-9s %-8s %10d %16s\n",
+			fmt.Printf("%-6d %-20s %-9s %-8s %-10s %10d %8d %12s %12s %12s %10s\n",
 				b.ID,
-				truncate(b.Name, 24),
+				truncate(b.Name, 20),
 				b.Visibility,
 				listed,
+				truncate(b.Strategy, 10),
 				b.EmployeeCount,
+				b.MachineryCount,
 				formatMicros(b.RevenuePerTickMicros),
+				formatMicros(b.MachineryUpkeepMicros),
+				formatMicros(b.LoanOutstandingMicros),
+				formatMicros(b.CashReserveMicros),
 			)
 		}
 	}
@@ -346,8 +390,20 @@ func renderBusinessState(raw map[string]any) error {
 	fmt.Printf("Name:        %s\n", out.Name)
 	fmt.Printf("Visibility:  %s\n", out.Visibility)
 	fmt.Printf("Listed:      %t\n", out.IsListed)
+	fmt.Printf("Strategy:    %s\n", out.Strategy)
 	fmt.Printf("Employees:   %d\n", out.EmployeeCount)
+	fmt.Printf("Machinery:   %d\n", out.MachineryCount)
+	fmt.Printf("Upgrades:    mkt=%d rd=%d auto=%d comp=%d\n", out.MarketingLevel, out.RDLevel, out.AutomationLevel, out.ComplianceLevel)
+	fmt.Printf("Brand:       %.2f%%\n", float64(out.BrandBps)/100)
+	fmt.Printf("Op Health:   %.2f%%\n", float64(out.OperationalHealthBps)/100)
+	fmt.Printf("Reserve:     %s stonky\n", formatMicros(out.CashReserveMicros))
 	fmt.Printf("Revenue/tick:%s stonky\n", formatMicros(out.RevenuePerTickMicros))
+	fmt.Printf("Mach output: %s stonky\n", formatMicros(out.MachineryOutputMicros))
+	fmt.Printf("Mach upkeep: %s stonky\n", formatMicros(out.MachineryUpkeepMicros))
+	fmt.Printf("Loan debt:   %s stonky\n", formatMicros(out.LoanOutstandingMicros))
+	if strings.TrimSpace(out.LastEvent) != "" {
+		fmt.Printf("Last event:  %s\n", out.LastEvent)
+	}
 	fmt.Println()
 	return nil
 }
@@ -398,6 +454,78 @@ func renderBusinessEmployees(raw map[string]any, businessID int64) error {
 			formatMicros(e.RevenuePerTickMicros),
 			float64(e.RiskBps)/100,
 			e.CreatedAt.Local().Format("2006-01-02 15:04"),
+		)
+	}
+	fmt.Println()
+	return nil
+}
+
+func renderBusinessMachinery(raw map[string]any, businessID int64) error {
+	out, err := decodeInto[machineryPayload](raw)
+	if err != nil {
+		return err
+	}
+	accent.Printf("\n== BUSINESS #%d MACHINERY ==\n", businessID)
+	if len(out.Machinery) == 0 {
+		printInfo("No machinery installed yet.")
+		return nil
+	}
+	fmt.Printf("%-4s %-16s %8s %12s %12s %10s\n", "ID", "TYPE", "LEVEL", "OUTPUT", "UPKEEP", "RELIAB.")
+	for _, m := range out.Machinery {
+		fmt.Printf("%-4d %-16s %8d %12s %12s %9.2f%%\n",
+			m.ID,
+			truncate(m.MachineType, 16),
+			m.Level,
+			formatMicros(m.OutputBonusMicros),
+			formatMicros(m.UpkeepMicros),
+			float64(m.ReliabilityBps)/100,
+		)
+	}
+	fmt.Println()
+	return nil
+}
+
+func renderBusinessLoans(raw map[string]any, businessID int64) error {
+	out, err := decodeInto[loansPayload](raw)
+	if err != nil {
+		return err
+	}
+	accent.Printf("\n== BUSINESS #%d LOANS ==\n", businessID)
+	if len(out.Loans) == 0 {
+		printInfo("No loans on this business.")
+		return nil
+	}
+	fmt.Printf("%-4s %12s %12s %9s %8s %-10s\n", "ID", "PRINCIPAL", "OUTSTAND", "RATE", "MISSED", "STATUS")
+	for _, l := range out.Loans {
+		fmt.Printf("%-4d %12s %12s %8.2f%% %8d %-10s\n",
+			l.ID,
+			formatMicros(l.PrincipalMicros),
+			formatMicros(l.OutstandingMicros),
+			float64(l.InterestBps)/100,
+			l.MissedTicks,
+			l.Status,
+		)
+	}
+	fmt.Println()
+	return nil
+}
+
+func renderFundsList(raw map[string]any) error {
+	out, err := decodeInto[fundsPayload](raw)
+	if err != nil {
+		return err
+	}
+	accent.Println("\n== MUTUAL FUNDS ==")
+	if len(out.Funds) == 0 {
+		printInfo("No funds available.")
+		return nil
+	}
+	fmt.Printf("%-8s %12s %-60s\n", "CODE", "NAV", "COMPONENTS")
+	for _, f := range out.Funds {
+		fmt.Printf("%-8s %12s %-60s\n",
+			f.Code,
+			formatMicros(f.NavMicros),
+			truncate(strings.Join(f.Components, ","), 60),
 		)
 	}
 	fmt.Println()

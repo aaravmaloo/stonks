@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type contextKey string
@@ -1043,7 +1044,10 @@ func (s *Server) handleSyncReplay(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeDomainError(w http.ResponseWriter, err error) {
+	var pgErr *pgconn.PgError
 	switch {
+	case errors.As(err, &pgErr) && pgErr.Code == "42P01":
+		writeError(w, http.StatusInternalServerError, "database schema is outdated: run migrations 0002_business_expansion.sql, 0003_loan_consequences.sql, and 0004_business_depth.sql")
 	case errors.Is(err, game.ErrDuplicateIdempotency):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, game.ErrInsufficientFunds), errors.Is(err, game.ErrInsufficientShares):

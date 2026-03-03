@@ -29,6 +29,7 @@ func main() {
 	}
 
 	root.AddCommand(
+		newTUICmd(&apiBase),
 		newSignupCmd(&apiBase),
 		newLoginCmd(&apiBase),
 		newLogoutCmd(),
@@ -40,6 +41,13 @@ func main() {
 		newLeaderboardCmd(&apiBase),
 		newFriendsCmd(&apiBase),
 	)
+
+	root.RunE = func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return runTUI(apiBase)
+		}
+		return cmd.Help()
+	}
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -843,7 +851,7 @@ func newBusinessStateCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			id, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			id, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
@@ -869,7 +877,7 @@ func newBusinessVisibilityCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			id, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			id, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
@@ -914,7 +922,7 @@ func newBusinessIPOCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			id, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			id, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
@@ -966,7 +974,7 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
@@ -1007,11 +1015,11 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
-			candidateID, err := int64FromArgOrPrompt(args, 1, "Candidate ID")
+			candidateID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 1, "Candidate ID")
 			if err != nil {
 				return err
 			}
@@ -1042,11 +1050,11 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
-			employeeID, err := int64FromArgOrPrompt(args, 1, "Employee ID")
+			employeeID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 1, "Employee ID")
 			if err != nil {
 				return err
 			}
@@ -1084,7 +1092,7 @@ func newBusinessMachineryCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
@@ -1107,7 +1115,7 @@ func newBusinessMachineryCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
@@ -1155,7 +1163,7 @@ func newBusinessLoansCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
@@ -1178,7 +1186,7 @@ func newBusinessLoansCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
@@ -1222,7 +1230,7 @@ func newBusinessLoansCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
@@ -1270,7 +1278,7 @@ func newBusinessSellCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
@@ -1303,7 +1311,7 @@ func newBusinessStrategyCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
@@ -1350,7 +1358,7 @@ func newBusinessUpgradesCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("login required: %w", err)
 			}
-			businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+			businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 			if err != nil {
 				return err
 			}
@@ -1413,7 +1421,7 @@ func runReserveTransfer(cmd *cobra.Command, apiBase *string, args []string, dire
 	if err != nil {
 		return fmt.Errorf("login required: %w", err)
 	}
-	businessID, err := int64FromArgOrPrompt(args, 0, "Business ID")
+	businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
 	if err != nil {
 		return err
 	}
@@ -1620,6 +1628,16 @@ func newLeaderboardCmd(apiBase *string) *cobra.Command {
 	return lb
 }
 
+func newTUICmd(apiBase *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "tui",
+		Short: "Launch the interactive TUI",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTUI(*apiBase)
+		},
+	}
+}
+
 func newFriendsCmd(apiBase *string) *cobra.Command {
 	friends := &cobra.Command{
 		Use:   "friends",
@@ -1720,7 +1738,7 @@ func inviteCodeFromArgsOrPrompt(args []string) (string, error) {
 	return strings.ToUpper(strings.TrimSpace(code)), nil
 }
 
-func int64FromArgOrPrompt(args []string, idx int, label string) (int64, error) {
+func int64FromArgOrPrompt(ctx context.Context, apiBase *string, args []string, idx int, label string) (int64, error) {
 	if len(args) > idx {
 		v, err := strconv.ParseInt(strings.TrimSpace(args[idx]), 10, 64)
 		if err != nil || v <= 0 {
@@ -1728,5 +1746,24 @@ func int64FromArgOrPrompt(args []string, idx int, label string) (int64, error) {
 		}
 		return v, nil
 	}
+
+	if label == "Business ID" {
+		sess, err := cl.LoadSession()
+		if err == nil {
+			client := newClient(apiBase)
+			dash, err := client.Dashboard(ctx, sess.AccessToken)
+			if err == nil {
+				if abID, ok := dash["active_business_id"]; ok && abID != nil {
+					switch v := abID.(type) {
+					case float64:
+						return int64(v), nil
+					case int64:
+						return v, nil
+					}
+				}
+			}
+		}
+	}
+
 	return promptInt64(label, 1)
 }

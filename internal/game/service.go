@@ -196,10 +196,10 @@ func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) 
 	out.SeasonID = seasonID
 
 	err := s.db.QueryRow(ctx, `
-		SELECT balance_micros, peak_net_worth_micros
+		SELECT balance_micros, peak_net_worth_micros, active_business_id
 		FROM game.wallets
 		WHERE user_id = $1 AND season_id = $2
-	`, userID, seasonID).Scan(&out.BalanceMicros, &out.PeakNetWorthMicros)
+	`, userID, seasonID).Scan(&out.BalanceMicros, &out.PeakNetWorthMicros, &out.ActiveBusinessID)
 	if err != nil {
 		return out, err
 	}
@@ -522,6 +522,16 @@ func (s *Service) CreateBusiness(ctx context.Context, in CreateBusinessInput) (i
 	if err != nil {
 		return 0, err
 	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE game.wallets
+		SET active_business_id = $1
+		WHERE user_id = $2 AND season_id = $3
+	`, id, in.UserID, in.SeasonID)
+	if err != nil {
+		return 0, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}

@@ -4,6 +4,7 @@ import "time"
 
 type Dashboard struct {
 	SeasonID           int64          `json:"season_id"`
+	ActiveBusinessID   *int64         `json:"active_business_id,omitempty"`
 	BalanceMicros      int64          `json:"balance_micros"`
 	NetWorthMicros     int64          `json:"net_worth_micros"`
 	PeakNetWorthMicros int64          `json:"peak_net_worth_micros"`

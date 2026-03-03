@@ -463,6 +463,9 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastSuccess = string(msg)
 		m.lastError = nil
 		m.subState = ""
+		if m.state == stateBusiness {
+			return m, m.fetchBusiness()
+		}
 		return m, nil
 
 	case errorMsg:
@@ -931,6 +934,9 @@ func (m mainModel) submitForm() tea.Cmd {
 			}
 			if m.subState == "set_visibility" {
 				visibility := strings.ToLower(strings.TrimSpace(m.inputs[0].Value()))
+				if visibility != "private" && visibility != "public" {
+					return errorMsg(fmt.Errorf("visibility must be private or public"))
+				}
 				_, err := m.client.SetBusinessVisibility(ctx, m.session.AccessToken, businessID, visibility, uuid.NewString())
 				if err != nil {
 					return errorMsg(err)
@@ -939,6 +945,9 @@ func (m mainModel) submitForm() tea.Cmd {
 			}
 			if m.subState == "business_ipo" {
 				symbol := strings.ToUpper(strings.TrimSpace(m.inputs[0].Value()))
+				if err := game.ValidateSymbol(symbol); err != nil {
+					return errorMsg(err)
+				}
 				price, err := strconv.ParseFloat(strings.TrimSpace(m.inputs[1].Value()), 64)
 				if err != nil || price <= 0 {
 					return errorMsg(fmt.Errorf("invalid ipo price"))
@@ -973,6 +982,11 @@ func (m mainModel) submitForm() tea.Cmd {
 			}
 			if m.subState == "machinery_buy" {
 				machineType := strings.ToLower(strings.TrimSpace(m.inputs[0].Value()))
+				switch machineType {
+				case "assembly_line", "robotics_cell", "cloud_cluster", "bio_reactor", "quantum_rig":
+				default:
+					return errorMsg(fmt.Errorf("invalid machine type"))
+				}
 				_, err := m.client.BuyBusinessMachinery(ctx, m.session.AccessToken, businessID, machineType, uuid.NewString())
 				if err != nil {
 					return errorMsg(err)
@@ -980,9 +994,11 @@ func (m mainModel) submitForm() tea.Cmd {
 				return successMsg("Machinery updated!")
 			}
 			if m.subState == "loan_take" || m.subState == "loan_repay" {
-				amount, _ := strconv.ParseFloat(m.inputs[0].Value(), 64)
+				amount, err := strconv.ParseFloat(strings.TrimSpace(m.inputs[0].Value()), 64)
+				if err != nil || amount <= 0 {
+					return errorMsg(fmt.Errorf("invalid amount"))
+				}
 				micros := game.StonkyToMicros(amount)
-				var err error
 				if m.subState == "loan_take" {
 					_, err = m.client.TakeBusinessLoan(ctx, m.session.AccessToken, businessID, micros, uuid.NewString())
 				} else {
@@ -995,6 +1011,11 @@ func (m mainModel) submitForm() tea.Cmd {
 			}
 			if m.subState == "set_strategy" {
 				strategy := strings.ToLower(strings.TrimSpace(m.inputs[0].Value()))
+				switch strategy {
+				case "aggressive", "balanced", "defensive":
+				default:
+					return errorMsg(fmt.Errorf("invalid strategy"))
+				}
 				_, err := m.client.SetBusinessStrategy(ctx, m.session.AccessToken, businessID, strategy, uuid.NewString())
 				if err != nil {
 					return errorMsg(err)
@@ -1003,6 +1024,11 @@ func (m mainModel) submitForm() tea.Cmd {
 			}
 			if m.subState == "buy_upgrade" {
 				upgrade := strings.ToLower(strings.TrimSpace(m.inputs[0].Value()))
+				switch upgrade {
+				case "marketing", "rd", "automation", "compliance":
+				default:
+					return errorMsg(fmt.Errorf("invalid upgrade"))
+				}
 				_, err := m.client.BuyBusinessUpgrade(ctx, m.session.AccessToken, businessID, upgrade, uuid.NewString())
 				if err != nil {
 					return errorMsg(err)
@@ -1109,22 +1135,22 @@ func (m mainModel) View() string {
 		}
 	}
 
-	footer := infoStyle.Render("\n q: main menu • esc: back • r: refresh")
+	footer := infoStyle.Render("\n q: main menu | esc: back | r: refresh")
 	if m.state == stateStocks && m.subState == "" {
-		footer += infoStyle.Render(" • b: buy • s: sell")
+		footer += infoStyle.Render(" | b: buy | s: sell")
 	}
 	if m.state == stateFunds && m.subState == "" {
-		footer += infoStyle.Render(" • b: buy • s: sell")
+		footer += infoStyle.Render(" | b: buy | s: sell")
 	}
 	if m.state == stateBusiness && m.subState == "" {
-		footer += infoStyle.Render(" • o: select • c: create • v: visibility • i: ipo • e/y: candidates/employees • h/t: hire/train")
-		footer += infoStyle.Render(" • m/b: machinery list/buy • k/l/p: loans list/take/repay • s/u: strategy/upgrade • d/w: reserve +/- • x: sell")
+		footer += infoStyle.Render(" | o: select | c: create | v: visibility | i: ipo | e/y: candidates/employees | h/t: hire/train")
+		footer += infoStyle.Render(" | m/b: machinery list/buy | k/l/p: loans list/take/repay | s/u: strategy/upgrade | d/w: reserve +/- | x: sell")
 	}
 	if m.state == stateFriends && m.subState == "" {
-		footer += infoStyle.Render(" • a: add friend")
+		footer += infoStyle.Render(" | a: add friend")
 	}
 	if m.state == stateSync {
-		footer += infoStyle.Render(" • s: sync now")
+		footer += infoStyle.Render(" | s: sync now")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, "\n", header, "\n", content, footer)
@@ -1191,7 +1217,9 @@ func (m mainModel) businessView() string {
 		return m.formView()
 	}
 	if m.business == nil {
-		return infoStyle.Render("No business selected. Press 'c' to create or 'o' to select ID.")
+		return infoStyle.Render(
+			"No business selected. Use: o=select id, c=create, r=refresh.",
+		)
 	}
 	b := m.business
 	s := fmt.Sprintf("  Selected Business ID: %d\n", m.selectedBusinessID)
@@ -1214,6 +1242,12 @@ func (m mainModel) businessView() string {
 	s += fmt.Sprintf("  Debt:       %s stonky\n", formatMicros(b.LoanOutstandingMicros))
 	s += fmt.Sprintf("  Employees:  %d\n", b.EmployeeCount)
 	s += fmt.Sprintf("  Upgrades:   mkt=%d rd=%d auto=%d comp=%d\n", b.MarketingLevel, b.RDLevel, b.AutomationLevel, b.ComplianceLevel)
+	s += "\n" + headerStyle.Render("Actions (CLI parity)") + "\n"
+	s += "  o select | c create | v visibility | i ipo | s strategy | u upgrade | x sell\n"
+	s += "  e candidates | y employees | h hire | t train\n"
+	s += "  m machinery list | b machinery buy\n"
+	s += "  k loans list | l loan take | p loan repay\n"
+	s += "  d reserve deposit | w reserve withdraw\n"
 	if len(m.candidates) > 0 {
 		s += "\n" + headerStyle.Render("Candidates") + "\n"
 		for _, c := range m.candidates {

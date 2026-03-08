@@ -38,6 +38,8 @@ var fundUniverse = map[string][]string{
 	"STABLE": {"NIMBUS", "RUSTIC", "PYLONS", "JAVOLT", "KOTLIN", "DATUMX", "LUMINA"},
 }
 
+const seededCandidatePoolSize = 50_000
+
 func candidatePool(target int) []struct {
 	Name    string
 	Role    string

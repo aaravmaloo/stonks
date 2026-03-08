@@ -174,14 +174,29 @@ func (s *Service) SeedDefaults(ctx context.Context, seasonID int64) error {
 	if err := tx.QueryRow(ctx, `SELECT COUNT(1) FROM game.employee_candidates WHERE season_id = $1`, seasonID).Scan(&candidateCount); err != nil {
 		return err
 	}
-	if candidateCount < 50 {
-		candidates := candidatePool(50)
+
+	if candidateCount < seededCandidatePoolSize {
+		candidates := candidatePool(seededCandidatePoolSize)
+		rows := make([][]any, 0, seededCandidatePoolSize-candidateCount)
 		for i := candidateCount; i < len(candidates); i++ {
-			c := candidates[i]
-			_, err := tx.Exec(ctx, `
-				INSERT INTO game.employee_candidates (season_id, full_name, role, trait, hire_cost_micros, revenue_per_tick_micros, risk_bps)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)
-			`, seasonID, c.Name, c.Role, c.Trait, c.Cost, c.Revenue, c.RiskBps)
+			pick := candidates[i]
+			rows = append(rows, []any{
+				seasonID,
+				pick.Name,
+				pick.Role,
+				pick.Trait,
+				pick.Cost,
+				pick.Revenue,
+				pick.RiskBps,
+			})
+		}
+		if len(rows) > 0 {
+			_, err := tx.CopyFrom(
+				ctx,
+				pgx.Identifier{"game", "employee_candidates"},
+				[]string{"season_id", "full_name", "role", "trait", "hire_cost_micros", "revenue_per_tick_micros", "risk_bps"},
+				pgx.CopyFromRows(rows),
+			)
 			if err != nil {
 				return err
 			}

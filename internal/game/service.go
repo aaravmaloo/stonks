@@ -690,9 +690,6 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 	if in.Count <= 0 {
 		return out, fmt.Errorf("count must be > 0")
 	}
-	if in.Count > 25 {
-		return out, fmt.Errorf("count must be <= 25")
-	}
 	strategy := strings.ToLower(strings.TrimSpace(in.Strategy))
 	orderBy, err := bulkHireOrder(strategy)
 	if err != nil {

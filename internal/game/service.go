@@ -1610,14 +1610,15 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 				return err
 			}
 		} else {
+			profitable := gross > 0
 			if _, err := tx.Exec(ctx, `
 				UPDATE game.businesses
-				SET brand_bps = CASE WHEN $1 > 0 THEN LEAST(20000, brand_bps + 20) ELSE GREATEST(5000, brand_bps - 10) END,
-				    operational_health_bps = CASE WHEN $1 > 0 THEN LEAST(15000, operational_health_bps + 15) ELSE GREATEST(5000, operational_health_bps - 18) END,
+				SET brand_bps = CASE WHEN $1 THEN LEAST(20000, brand_bps + 20) ELSE GREATEST(5000, brand_bps - 10) END,
+				    operational_health_bps = CASE WHEN $1 THEN LEAST(15000, operational_health_bps + 15) ELSE GREATEST(5000, operational_health_bps - 18) END,
 				    last_event = '',
 				    updated_at = now()
 				WHERE id = $2 AND season_id = $3
-			`, gross, c.businessID, seasonID); err != nil {
+			`, profitable, c.businessID, seasonID); err != nil {
 				return err
 			}
 		}

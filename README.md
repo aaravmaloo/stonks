@@ -119,6 +119,8 @@ Economy tick also applies:
 - `migrations/0002_business_expansion.sql`: machinery, loans, bank-sale history, fund positions.
 - `migrations/0003_loan_consequences.sql`: delinquency tracking column for loan consequences.
 - `migrations/0004_business_depth.sql`: strategy/upgrades/brand/health/reserve columns.
+- `migrations/0005_active_business.sql`: active business pointer on wallets.
+- `migrations/0006_widen_market_price_columns.sql`: repair legacy `INTEGER` market-price columns to `BIGINT`.
 
 ## Local setup
 
@@ -157,6 +159,8 @@ psql "$DATABASE_URL" -f migrations/0001_init.sql
 psql "$DATABASE_URL" -f migrations/0002_business_expansion.sql
 psql "$DATABASE_URL" -f migrations/0003_loan_consequences.sql
 psql "$DATABASE_URL" -f migrations/0004_business_depth.sql
+psql "$DATABASE_URL" -f migrations/0005_active_business.sql
+psql "$DATABASE_URL" -f migrations/0006_widen_market_price_columns.sql
 ```
 
 ### Run services

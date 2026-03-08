@@ -1087,7 +1087,7 @@ func writeDomainError(w http.ResponseWriter, err error) {
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.As(err, &pgErr) && pgErr.Code == "42P01":
-		writeError(w, http.StatusInternalServerError, "database schema is outdated: run migrations 0002_business_expansion.sql, 0003_loan_consequences.sql, and 0004_business_depth.sql")
+		writeError(w, http.StatusInternalServerError, "database schema is outdated: run migrations 0002_business_expansion.sql through 0006_widen_market_price_columns.sql")
 	case errors.Is(err, game.ErrDuplicateIdempotency):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, game.ErrInsufficientFunds), errors.Is(err, game.ErrInsufficientShares):

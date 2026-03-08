@@ -1,0 +1,37 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: stanks-api:local
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: stanks-worker:local
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  migrate:
+    image: postgres:16-alpine
+    env_file:
+      - .env
+    working_dir: /work
+    volumes:
+      - ./:/work:ro
+    entrypoint: ["/bin/sh", "-lc"]
+    command: >
+      set -e;
+      for f in /work/migrations/*.sql; do
+        echo "Running $$f";
+        psql "$$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$$f";
+      done

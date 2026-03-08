@@ -1293,8 +1293,8 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE game.stocks
-			SET current_price_micros = $1,
-			    anchor_price_micros = $2,
+			SET current_price_micros = $1::BIGINT,
+			    anchor_price_micros = $2::BIGINT,
 			    updated_at = now()
 			WHERE id = $3
 		`, next, nextAnchor, st.id); err != nil {
@@ -1302,7 +1302,7 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO game.stock_prices (stock_id, tick_at, price_micros)
-			VALUES ($1, now(), $2)
+			VALUES ($1, now(), $2::BIGINT)
 		`, st.id, next); err != nil {
 			return err
 		}

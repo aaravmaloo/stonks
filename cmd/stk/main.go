@@ -486,7 +486,7 @@ func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 
 	action, err := promptChoice("Business action", []string{
 		"create", "state", "visibility", "ipo",
-		"employees_candidates", "employees_list", "employees_hire", "employees_train",
+		"employees_candidates", "employees_list", "employees_hire", "employees_hire_many", "employees_train",
 		"machinery_list", "machinery_buy",
 		"loans_list", "loans_take", "loans_repay",
 		"strategy", "upgrade", "reserve_deposit", "reserve_withdraw",
@@ -588,6 +588,25 @@ func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 			return err
 		}
 		return renderSimpleOK(out, fmt.Sprintf("Hired candidate %d for business %d.", candidateID, id))
+	case "employees_hire_many":
+		id, err := promptInt64("Business ID", 1)
+		if err != nil {
+			return err
+		}
+		count, err := promptInt64("How many hires", 1)
+		if err != nil {
+			return err
+		}
+		strategy, err := promptChoice("Hiring strategy", []string{"best_value", "high_output", "low_risk"}, "best_value")
+		if err != nil {
+			return err
+		}
+		idem := uuid.NewString()
+		out, err := client.HireEmployeesBulk(ctx, sess.AccessToken, id, int(count), strategy, idem)
+		if err != nil {
+			return err
+		}
+		return renderSimpleOK(out, fmt.Sprintf("Bulk-hired up to %d candidates for business %d using %s.", count, id, strategy))
 	case "employees_train":
 		id, err := promptInt64("Business ID", 1)
 		if err != nil {
@@ -1039,6 +1058,50 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 				})
 			}
 			return renderSimpleOK(out, fmt.Sprintf("Hired candidate %d for business %d.", candidateID, businessID))
+		},
+	})
+	employees.AddCommand(&cobra.Command{
+		Use:   "hire-many [business_id] [count] [best_value|high_output|low_risk]",
+		Short: "Hire multiple candidates in one shot using a strategy",
+		Args:  cobra.MaximumNArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
+			if err != nil {
+				return err
+			}
+			count64, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 1, "How many hires")
+			if err != nil {
+				return err
+			}
+			strategy := "best_value"
+			if len(args) >= 3 {
+				strategy = strings.ToLower(strings.TrimSpace(args[2]))
+			} else {
+				strategy, err = promptChoice("Hiring strategy", []string{"best_value", "high_output", "low_risk"}, "best_value")
+				if err != nil {
+					return err
+				}
+			}
+			idem := uuid.NewString()
+			path := fmt.Sprintf("/v1/businesses/%d/employees/hire-batch", businessID)
+			body := map[string]any{"count": count64, "strategy": strategy}
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.HireEmployeesBulk(ctx, sess.AccessToken, businessID, int(count64), strategy, idem)
+			if err != nil {
+				return queueOnNetworkError(err, syncq.Command{
+					Method:         "POST",
+					Path:           path,
+					Body:           body,
+					IdempotencyKey: idem,
+				})
+			}
+			return renderSimpleOK(out, fmt.Sprintf("Bulk-hired candidates for business %d using %s.", businessID, strategy))
 		},
 	})
 	employees.AddCommand(&cobra.Command{

@@ -57,7 +57,7 @@ func LoadAPIFromEnv() (APIConfig, error) {
 
 func LoadCLIFromEnv() CLIConfig {
 	return CLIConfig{
-		APIBaseURL: strings.TrimRight(envDefault("STK_API_BASE_URL", "https://stonks-api.fxtun.dev"), "/"),
+		APIBaseURL: strings.TrimRight(envDefault("STK_API_BASE_URL", "https://stanks-api.fxtun.dev"), "/"),
 	}
 }
 

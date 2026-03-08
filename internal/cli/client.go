@@ -122,6 +122,15 @@ func (c *Client) HireEmployee(ctx context.Context, accessToken string, businessI
 	return out, err
 }
 
+func (c *Client) HireEmployeesBulk(ctx context.Context, accessToken string, businessID int64, count int, strategy, idem string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/employees/hire-batch", businessID), accessToken, map[string]any{
+		"count":    count,
+		"strategy": strategy,
+	}, &out, idem)
+	return out, err
+}
+
 func (c *Client) TrainProfessional(ctx context.Context, accessToken string, businessID, employeeID int64, idem string) (map[string]any, error) {
 	var out map[string]any
 	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/employees/%d/train", businessID, employeeID), accessToken, map[string]any{}, &out, idem)

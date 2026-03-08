@@ -670,6 +670,150 @@ func (s *Service) HireEmployee(ctx context.Context, in HireEmployeeInput) error 
 	return tx.Commit(ctx)
 }
 
+func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInput) (map[string]any, error) {
+	out := map[string]any{}
+	if in.Count <= 0 {
+		return out, fmt.Errorf("count must be > 0")
+	}
+	if in.Count > 25 {
+		return out, fmt.Errorf("count must be <= 25")
+	}
+	strategy := strings.ToLower(strings.TrimSpace(in.Strategy))
+	orderBy, err := bulkHireOrder(strategy)
+	if err != nil {
+		return out, err
+	}
+	if strategy == "" {
+		strategy = "best_value"
+	}
+
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return out, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := claimIdempotency(ctx, tx, in.UserID, in.IdempotencyKey, "hire_employee_batch"); err != nil {
+		return out, err
+	}
+
+	var ownerID string
+	if err := tx.QueryRow(ctx, `
+		SELECT owner_user_id
+		FROM game.businesses
+		WHERE id = $1 AND season_id = $2
+		FOR UPDATE
+	`, in.BusinessID, in.SeasonID).Scan(&ownerID); err != nil {
+		return out, err
+	}
+	if ownerID != in.UserID {
+		return out, ErrUnauthorized
+	}
+
+	var balance, peak int64
+	if err := tx.QueryRow(ctx, `
+		SELECT balance_micros, peak_net_worth_micros
+		FROM game.wallets
+		WHERE user_id = $1 AND season_id = $2
+		FOR UPDATE
+	`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+		return out, err
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT ec.id, ec.full_name, ec.role, ec.trait, ec.hire_cost_micros, ec.revenue_per_tick_micros, ec.risk_bps
+		FROM game.employee_candidates ec
+		LEFT JOIN game.business_employees be
+			ON be.business_id = $1
+		   AND be.season_id = $2
+		   AND be.source_candidate_id = ec.id
+		WHERE ec.season_id = $2
+		  AND be.id IS NULL
+		ORDER BY `+orderBy+`
+		LIMIT $3
+	`, in.BusinessID, in.SeasonID, in.Count)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+
+	type hirePick struct {
+		ID      int64
+		Name    string
+		Role    string
+		Trait   string
+		Cost    int64
+		Revenue int64
+		Risk    int32
+	}
+	shortlist := make([]hirePick, 0, in.Count)
+	for rows.Next() {
+		var pick hirePick
+		if err := rows.Scan(&pick.ID, &pick.Name, &pick.Role, &pick.Trait, &pick.Cost, &pick.Revenue, &pick.Risk); err != nil {
+			return out, err
+		}
+		shortlist = append(shortlist, pick)
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	if len(shortlist) == 0 {
+		return out, fmt.Errorf("no candidates available to hire")
+	}
+
+	budgetFloor := -DebtLimitFromPeak(peak)
+	totalCost := int64(0)
+	hiredIDs := make([]int64, 0, len(shortlist))
+	hiredNames := make([]string, 0, len(shortlist))
+	for _, pick := range shortlist {
+		if balance-(totalCost+pick.Cost) < budgetFloor {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO game.business_employees
+			    (business_id, season_id, source_candidate_id, full_name, role, trait, revenue_per_tick_micros, risk_bps)
+			VALUES
+			    ($1, $2, $3, $4, $5, $6, $7, $8)
+		`, in.BusinessID, in.SeasonID, pick.ID, pick.Name, pick.Role, pick.Trait, pick.Revenue, pick.Risk); err != nil {
+			return out, err
+		}
+		totalCost += pick.Cost
+		hiredIDs = append(hiredIDs, pick.ID)
+		hiredNames = append(hiredNames, pick.Name)
+	}
+	if len(hiredIDs) == 0 {
+		return out, ErrInsufficientFunds
+	}
+
+	balance -= totalCost
+	if _, err := tx.Exec(ctx, `
+		UPDATE game.wallets
+		SET balance_micros = $1, updated_at = now()
+		WHERE user_id = $2 AND season_id = $3
+	`, balance, in.UserID, in.SeasonID); err != nil {
+		return out, err
+	}
+	if err := appendLedgerEntries(ctx, tx, in.UserID, in.SeasonID, "employee_hire_batch", totalCost, 0); err != nil {
+		return out, err
+	}
+	if err := s.updatePeakNetWorthTx(ctx, tx, in.UserID, in.SeasonID); err != nil {
+		return out, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return out, err
+	}
+
+	out["ok"] = true
+	out["strategy"] = strategy
+	out["requested_count"] = in.Count
+	out["hired_count"] = len(hiredIDs)
+	out["hired_candidate_ids"] = hiredIDs
+	out["hired_names"] = hiredNames
+	out["total_cost_micros"] = totalCost
+	out["new_balance_micros"] = balance
+	return out, nil
+}
+
 func (s *Service) ListEmployeeCandidates(ctx context.Context, seasonID int64) ([]map[string]any, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT id, full_name, role, trait, hire_cost_micros, revenue_per_tick_micros, risk_bps
@@ -1236,10 +1380,18 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		       b.compliance_level,
 		       b.brand_bps,
 		       b.operational_health_bps,
-		       b.cash_reserve_micros,
+	       b.cash_reserve_micros,
 		       COALESCE(be.employee_revenue, 0) AS employee_revenue,
 		       COALESCE(be.employee_count, 0) AS employee_count,
 		       COALESCE(be.avg_risk_bps, 0) AS avg_risk_bps,
+		       COALESCE(be.ops_count, 0) AS ops_count,
+		       COALESCE(be.engineer_count, 0) AS engineer_count,
+		       COALESCE(be.product_count, 0) AS product_count,
+		       COALESCE(be.sales_count, 0) AS sales_count,
+		       COALESCE(be.growth_count, 0) AS growth_count,
+		       COALESCE(be.finance_count, 0) AS finance_count,
+		       COALESCE(be.legal_count, 0) AS legal_count,
+		       COALESCE(be.design_count, 0) AS design_count,
 		       COALESCE(m.output_bonus, 0) AS machine_output,
 		       COALESCE(m.upkeep, 0) AS machine_upkeep,
 		       COALESCE(l.loan_interest, 0) AS loan_interest
@@ -1247,7 +1399,15 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		LEFT JOIN LATERAL (
 			SELECT COALESCE(SUM(be.revenue_per_tick_micros), 0) AS employee_revenue,
 			       COUNT(1) AS employee_count,
-			       COALESCE(AVG(be.risk_bps), 0) AS avg_risk_bps
+			       COALESCE(AVG(be.risk_bps), 0) AS avg_risk_bps,
+			       COALESCE(SUM(CASE WHEN be.role = 'ops' THEN 1 ELSE 0 END), 0) AS ops_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'engineer' THEN 1 ELSE 0 END), 0) AS engineer_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'product' THEN 1 ELSE 0 END), 0) AS product_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'sales' THEN 1 ELSE 0 END), 0) AS sales_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'growth' THEN 1 ELSE 0 END), 0) AS growth_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'finance' THEN 1 ELSE 0 END), 0) AS finance_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'legal' THEN 1 ELSE 0 END), 0) AS legal_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'design' THEN 1 ELSE 0 END), 0) AS design_count
 			FROM game.business_employees be
 			WHERE be.business_id = b.id
 		) be ON TRUE
@@ -1285,6 +1445,14 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		employeeRevenue int64
 		employeeCount   int64
 		avgRiskBps      float64
+		opsCount        int64
+		engineerCount   int64
+		productCount    int64
+		salesCount      int64
+		growthCount     int64
+		financeCount    int64
+		legalCount      int64
+		designCount     int64
 		machineOutput   int64
 		machineUpkeep   int64
 		loanInterest    int64
@@ -1297,6 +1465,7 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 			&c.visibility, &c.isListed, &c.strategy, &c.marketingLevel, &c.rdLevel, &c.automationLevel, &c.complianceLevel,
 			&c.brandBps, &c.healthBps, &c.reserveMicros,
 			&c.employeeRevenue, &c.employeeCount, &c.avgRiskBps,
+			&c.opsCount, &c.engineerCount, &c.productCount, &c.salesCount, &c.growthCount, &c.financeCount, &c.legalCount, &c.designCount,
 			&c.machineOutput, &c.machineUpkeep, &c.loanInterest,
 		); err != nil {
 			return err
@@ -1317,6 +1486,21 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 			}
 		}
 		employeeRevenue := int64(math.Round(float64(c.employeeRevenue) * empEfficiency))
+		team := analyzeWorkforce(workforceProfile{
+			EmployeeCount:   c.employeeCount,
+			OpsCount:        c.opsCount,
+			EngineerCount:   c.engineerCount,
+			ProductCount:    c.productCount,
+			SalesCount:      c.salesCount,
+			GrowthCount:     c.growthCount,
+			FinanceCount:    c.financeCount,
+			LegalCount:      c.legalCount,
+			DesignCount:     c.designCount,
+			MarketingLevel:  c.marketingLevel,
+			RDLevel:         c.rdLevel,
+			AutomationLevel: c.automationLevel,
+			ComplianceLevel: c.complianceLevel,
+		})
 
 		autoBoost := 1.0 + float64(c.automationLevel)*0.03
 		marketingBoost := 1.0 + float64(c.marketingLevel)*0.02
@@ -1329,10 +1513,10 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 			upkeepCut = 0.35
 		}
 		machineOutput := int64(math.Round(float64(c.machineOutput) * autoBoost))
-		machineUpkeep := int64(math.Round(float64(c.machineUpkeep) * (1 - upkeepCut)))
+		machineUpkeep := int64(math.Round(float64(c.machineUpkeep) * (1 - upkeepCut) * team.MachineUpkeepFactor))
 
 		gross := c.baseRevenue + employeeRevenue + machineOutput - machineUpkeep
-		gross = int64(math.Round(float64(gross) * marketingBoost * rdBoost * brandBoost * healthBoost))
+		gross = int64(math.Round(float64(gross) * marketingBoost * rdBoost * brandBoost * healthBoost * team.RevenueMultiplier))
 
 		if c.visibility == "public" {
 			gross = int64(math.Round(float64(gross) * 1.03))
@@ -1356,15 +1540,39 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		if c.strategy == "defensive" {
 			strategyRisk = 0.75
 		}
-		riskPenalty := int64(math.Round(float64(gross) * riskFactor * 0.30 * compShield * strategyRisk))
+		riskPenalty := int64(math.Round(float64(gross) * riskFactor * 0.30 * compShield * strategyRisk * team.RiskMultiplier))
 
 		upgradeBurn := int64((int64(c.marketingLevel) + int64(c.rdLevel) + int64(c.automationLevel) + int64(c.complianceLevel)) * 3 * MicrosPerStonky)
 
 		eventTag := ""
 		p := nextFloat()
-		viralChance := 0.020 + float64(c.marketingLevel)*0.0012
-		crisisChance := 0.018 + riskFactor*0.07
-		if p < viralChance {
+		launchChance := 0.008 + team.LaunchChanceBonus
+		demandChance := 0.010 + team.DemandChanceBonus
+		viralChance := 0.020 + float64(c.marketingLevel)*0.0012 + team.ViralChanceBonus
+		crisisChance := 0.018 + riskFactor*0.07 + team.CrisisChanceBonus
+		if p < launchChance {
+			bonus := int64(math.Round(float64(gross) * (0.12 + nextFloat()*0.10)))
+			gross += bonus
+			eventTag = "product_launch"
+			if _, err := tx.Exec(ctx, `
+				UPDATE game.businesses
+				SET brand_bps = LEAST(20000, brand_bps + $1), operational_health_bps = LEAST(15000, operational_health_bps + $2), last_event = $3, updated_at = now()
+				WHERE id = $4 AND season_id = $5
+			`, 180, 90, eventTag, c.businessID, seasonID); err != nil {
+				return err
+			}
+		} else if p < launchChance+demandChance {
+			bonus := int64(math.Round(float64(gross) * (0.10 + nextFloat()*0.08)))
+			gross += bonus
+			eventTag = "demand_surge"
+			if _, err := tx.Exec(ctx, `
+				UPDATE game.businesses
+				SET brand_bps = LEAST(20000, brand_bps + $1), operational_health_bps = LEAST(15000, operational_health_bps + $2), last_event = $3, updated_at = now()
+				WHERE id = $4 AND season_id = $5
+			`, 130, 70, eventTag, c.businessID, seasonID); err != nil {
+				return err
+			}
+		} else if p < launchChance+demandChance+viralChance {
 			bonus := int64(math.Round(float64(gross) * (0.08 + nextFloat()*0.15)))
 			gross += bonus
 			eventTag = "viral_breakout"
@@ -1375,7 +1583,7 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 			`, 240, 120, eventTag, c.businessID, seasonID); err != nil {
 				return err
 			}
-		} else if p < viralChance+crisisChance {
+		} else if p < launchChance+demandChance+viralChance+crisisChance {
 			hit := int64(math.Round(float64(gross) * (0.10 + nextFloat()*0.20)))
 			gross -= hit
 			if gross < 0 {
@@ -1434,7 +1642,7 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 			}
 		}
 
-		reserveYield := int64(math.Round(float64(c.reserveMicros) * (0.00025 + float64(c.rdLevel)*0.00003)))
+		reserveYield := int64(math.Round(float64(c.reserveMicros) * (0.00025 + float64(c.rdLevel)*0.00003) * team.ReserveYieldFactor))
 		if reserveYield > 0 {
 			if _, err := tx.Exec(ctx, `
 				UPDATE game.businesses

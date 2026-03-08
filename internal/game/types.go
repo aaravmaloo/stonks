@@ -110,6 +110,15 @@ type HireEmployeeInput struct {
 	IdempotencyKey string
 }
 
+type BulkHireEmployeesInput struct {
+	UserID         string
+	SeasonID       int64
+	BusinessID     int64
+	Count          int
+	Strategy       string
+	IdempotencyKey string
+}
+
 type BuyMachineryInput struct {
 	UserID         string
 	SeasonID       int64

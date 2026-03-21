@@ -632,7 +632,7 @@ func (s *Service) PlaceOrder(ctx context.Context, in OrderInput) (OrderResult, e
 	const maxAttempts = 8
 	retryDelay := 75 * time.Millisecond
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+		tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 		if err != nil {
 			return out, err
 		}
@@ -649,7 +649,6 @@ func (s *Service) PlaceOrder(ctx context.Context, in OrderInput) (OrderResult, e
 				SELECT id, current_price_micros, listed_public
 				FROM game.stocks
 				WHERE season_id = $1 AND symbol = $2
-				FOR UPDATE
 			`, in.SeasonID, in.Symbol).Scan(&stockID, &out.PriceMicros, &listed); err != nil {
 				if err == pgx.ErrNoRows {
 					return ErrStockNotFound

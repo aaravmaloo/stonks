@@ -114,7 +114,7 @@ func (s *Service) EnsurePlayer(ctx context.Context, userID, email, username stri
 		INSERT INTO game.wallets (user_id, season_id, balance_micros, peak_net_worth_micros)
 		VALUES ($1, $2, $3, $3)
 		ON CONFLICT (user_id, season_id) DO NOTHING
-	`, userID, seasonID, StarterBalanceMicros)
+	`, userID, seasonID, StarterBalanceMicros+SignupBonusMicros)
 	if err != nil {
 		return err
 	}
@@ -1499,7 +1499,7 @@ func (s *Service) ReplaySync(ctx context.Context, userID string, seasonID int64,
 	return results, nil
 }
 
-func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery time.Duration, employeePerTick int, interestAPR float64, volatility string) error {
+func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery time.Duration, employeePerTick, newStocksPerTick int, interestAPR float64, volatility string) error {
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
@@ -1609,6 +1609,9 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 	if err := appendEmployeeCandidatesTx(ctx, tx, seasonID, employeePerTick); err != nil {
 		return err
 	}
+	if err := appendGeneratedStocksTx(ctx, tx, seasonID, newStocksPerTick, s.nextFloat); err != nil {
+		return err
+	}
 	if err := updateSeasonPeakNetWorthTx(ctx, tx, seasonID); err != nil {
 		return err
 	}
@@ -1675,6 +1678,130 @@ func insertGeneratedEmployeeCandidatesTx(ctx context.Context, tx pgx.Tx, seasonI
 		pgx.CopyFromRows(rows),
 	)
 	return err
+}
+
+func appendGeneratedStocksTx(ctx context.Context, tx pgx.Tx, seasonID int64, count int, nextFloat func() float64) error {
+	if count <= 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `SELECT symbol FROM game.stocks WHERE season_id = $1`, seasonID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	used := make(map[string]struct{})
+	for rows.Next() {
+		var symbol string
+		if err := rows.Scan(&symbol); err != nil {
+			return err
+		}
+		used[strings.ToUpper(strings.TrimSpace(symbol))] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	var stockRows [][]any
+	nextIndex := len(used)
+	for len(stockRows) < count {
+		symbol := generatedStockSymbol(nextIndex)
+		nextIndex++
+		if _, exists := used[symbol]; exists {
+			continue
+		}
+		used[symbol] = struct{}{}
+
+		priceMicros := int64(math.Round((1 + nextFloat()*98) * float64(MicrosPerStonky)))
+		displayName := generatedStockName(symbol)
+		stockRows = append(stockRows, []any{
+			seasonID,
+			symbol,
+			displayName,
+			true,
+			priceMicros,
+			priceMicros,
+		})
+	}
+
+	inserted, err := tx.CopyFrom(
+		ctx,
+		pgx.Identifier{"game", "stocks"},
+		[]string{"season_id", "symbol", "display_name", "listed_public", "current_price_micros", "anchor_price_micros"},
+		pgx.CopyFromRows(stockRows),
+	)
+	if err != nil {
+		return err
+	}
+	if inserted == 0 {
+		return nil
+	}
+
+	type insertedStock struct {
+		id     int64
+		symbol string
+	}
+	createdRows, err := tx.Query(ctx, `
+		SELECT id, symbol
+		FROM game.stocks
+		WHERE season_id = $1 AND symbol = ANY($2)
+		ORDER BY symbol
+	`, seasonID, symbolsFromRows(stockRows))
+	if err != nil {
+		return err
+	}
+	defer createdRows.Close()
+
+	insertedStocks := make([]insertedStock, 0, len(stockRows))
+	for createdRows.Next() {
+		var item insertedStock
+		if err := createdRows.Scan(&item.id, &item.symbol); err != nil {
+			return err
+		}
+		insertedStocks = append(insertedStocks, item)
+	}
+	if err := createdRows.Err(); err != nil {
+		return err
+	}
+
+	priceBySymbol := make(map[string]int64, len(stockRows))
+	for _, row := range stockRows {
+		priceBySymbol[row[1].(string)] = row[4].(int64)
+	}
+	stockPriceRows := make([][]any, 0, len(insertedStocks))
+	for _, item := range insertedStocks {
+		stockPriceRows = append(stockPriceRows, []any{item.id, time.Now().UTC(), priceBySymbol[item.symbol]})
+	}
+	_, err = tx.CopyFrom(
+		ctx,
+		pgx.Identifier{"game", "stock_prices"},
+		[]string{"stock_id", "tick_at", "price_micros"},
+		pgx.CopyFromRows(stockPriceRows),
+	)
+	return err
+}
+
+func generatedStockSymbol(index int) string {
+	const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	buf := [6]byte{}
+	n := index
+	for i := 5; i >= 0; i-- {
+		buf[i] = letters[n%26]
+		n /= 26
+	}
+	return string(buf[:])
+}
+
+func generatedStockName(symbol string) string {
+	return fmt.Sprintf("%s Holdings", symbol)
+}
+
+func symbolsFromRows(rows [][]any) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row[1].(string))
+	}
+	return out
 }
 
 func applyDebtInterestTx(ctx context.Context, tx pgx.Tx, seasonID int64, tickEvery time.Duration, apr float64) error {

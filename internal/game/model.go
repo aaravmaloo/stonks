@@ -12,6 +12,7 @@ const (
 	MicrosPerStonky = int64(1_000_000)
 
 	StarterBalanceMicros = int64(25_000) * MicrosPerStonky
+	SignupBonusMicros    = int64(2_000) * MicrosPerStonky
 	BusinessUnlockMicros = int64(250_000) * MicrosPerStonky
 
 	MinDebtLimitMicros = int64(5_000) * MicrosPerStonky

@@ -438,6 +438,16 @@ func max64(a, b int64) int64 {
 	return b
 }
 
+func effectiveEmployeeLimit(limit int64) int64 {
+	if limit <= 0 {
+		return BaseBusinessEmployeeLimit
+	}
+	if limit > MaxBusinessEmployees {
+		return MaxBusinessEmployees
+	}
+	return limit
+}
+
 func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) (Dashboard, error) {
 	var out Dashboard
 	out.SeasonID = seasonID
@@ -852,22 +862,24 @@ func (s *Service) HireEmployee(ctx context.Context, in HireEmployeeInput) error 
 	}
 
 	var ownerID string
+	var employeeLimit int64
 	if err := tx.QueryRow(ctx, `
-		SELECT owner_user_id
+		SELECT owner_user_id, seat_capacity
 		FROM game.businesses
 		WHERE id = $1 AND season_id = $2
 		FOR UPDATE
-	`, in.BusinessID, in.SeasonID).Scan(&ownerID); err != nil {
+	`, in.BusinessID, in.SeasonID).Scan(&ownerID, &employeeLimit); err != nil {
 		return err
 	}
 	if ownerID != in.UserID {
 		return ErrUnauthorized
 	}
+	employeeLimit = effectiveEmployeeLimit(employeeLimit)
 	currentEmployees, err := businessEmployeeCountTx(ctx, tx, in.BusinessID, in.SeasonID)
 	if err != nil {
 		return err
 	}
-	if currentEmployees >= MaxBusinessEmployees {
+	if currentEmployees >= employeeLimit {
 		return ErrEmployeeLimitReached
 	}
 
@@ -948,25 +960,27 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 	}
 
 	var ownerID string
+	var employeeLimit int64
 	if err := tx.QueryRow(ctx, `
-		SELECT owner_user_id
+		SELECT owner_user_id, seat_capacity
 		FROM game.businesses
 		WHERE id = $1 AND season_id = $2
 		FOR UPDATE
-	`, in.BusinessID, in.SeasonID).Scan(&ownerID); err != nil {
+	`, in.BusinessID, in.SeasonID).Scan(&ownerID, &employeeLimit); err != nil {
 		return out, err
 	}
 	if ownerID != in.UserID {
 		return out, ErrUnauthorized
 	}
+	employeeLimit = effectiveEmployeeLimit(employeeLimit)
 	currentEmployees, err := businessEmployeeCountTx(ctx, tx, in.BusinessID, in.SeasonID)
 	if err != nil {
 		return out, err
 	}
-	if currentEmployees >= MaxBusinessEmployees {
+	if currentEmployees >= employeeLimit {
 		return out, ErrEmployeeLimitReached
 	}
-	remainingSlots := int(MaxBusinessEmployees - currentEmployees)
+	remainingSlots := int(employeeLimit - currentEmployees)
 	if remainingSlots <= 0 {
 		return out, ErrEmployeeLimitReached
 	}
@@ -1088,9 +1102,9 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 	out["hired_count"] = len(hiredIDs)
 	out["total_cost_micros"] = totalCost
 	out["new_balance_micros"] = balance
-	out["employee_limit"] = MaxBusinessEmployees
+	out["employee_limit"] = employeeLimit
 	out["employee_count"] = currentEmployees + int64(len(hiredIDs))
-	out["employee_slots_remaining"] = MaxBusinessEmployees - (currentEmployees + int64(len(hiredIDs)))
+	out["employee_slots_remaining"] = employeeLimit - (currentEmployees + int64(len(hiredIDs)))
 	if len(hiredIDs) <= 25 {
 		out["hired_candidate_ids"] = hiredIDs
 		out["hired_names"] = hiredNames

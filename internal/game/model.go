@@ -19,7 +19,9 @@ const (
 
 	ShareScale = int64(10_000) // 1 share = 10_000 units.
 
-	MaxBusinessEmployees = int64(60_000)
+	BaseBusinessEmployeeLimit = int64(60_000)
+	SeatUpgradeIncrement      = int64(10_000)
+	MaxBusinessEmployees      = int64(250_000)
 )
 
 var (

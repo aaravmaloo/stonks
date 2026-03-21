@@ -3,6 +3,7 @@ package game
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -170,40 +171,261 @@ func (s *Service) SeedDefaults(ctx context.Context, seasonID int64) error {
 		}
 	}
 
-	var candidateCount int
-	if err := tx.QueryRow(ctx, `SELECT COUNT(1) FROM game.employee_candidates WHERE season_id = $1`, seasonID).Scan(&candidateCount); err != nil {
+	if err := ensureMinimumEmployeeCandidatesTx(ctx, tx, seasonID, seededCandidatePoolSize); err != nil {
 		return err
 	}
 
-	if candidateCount < seededCandidatePoolSize {
-		candidates := candidatePool(seededCandidatePoolSize)
-		rows := make([][]any, 0, seededCandidatePoolSize-candidateCount)
-		for i := candidateCount; i < len(candidates); i++ {
-			pick := candidates[i]
-			rows = append(rows, []any{
-				seasonID,
-				pick.Name,
-				pick.Role,
-				pick.Trait,
-				pick.Cost,
-				pick.Revenue,
-				pick.RiskBps,
-			})
+	return tx.Commit(ctx)
+}
+
+type businessCycle struct {
+	businessID       int64
+	userID           string
+	name             string
+	visibility       string
+	isListed         bool
+	stockSymbol      string
+	strategy         string
+	baseRevenue      int64
+	marketingLevel   int32
+	rdLevel          int32
+	automationLevel  int32
+	complianceLevel  int32
+	brandBps         int32
+	healthBps        int32
+	reserveMicros    int64
+	employeeRevenue  int64
+	employeeCount    int64
+	avgRiskBps       float64
+	opsCount         int64
+	engineerCount    int64
+	productCount     int64
+	salesCount       int64
+	growthCount      int64
+	financeCount     int64
+	legalCount       int64
+	designCount      int64
+	machineOutput    int64
+	machineUpkeep    int64
+	loanInterest     int64
+	stockID          *int64
+	stockPrice       int64
+	stockAnchorPrice int64
+}
+
+type businessProjection struct {
+	GrossRevenueMicros   int64
+	OperatingCostsMicros int64
+	RevenuePerTickMicros int64
+	MachineOutputMicros  int64
+	MachineUpkeepMicros  int64
+}
+
+func loadBusinessCyclesTx(ctx context.Context, tx pgx.Tx, seasonID int64, ownerUserID string, businessID *int64) ([]businessCycle, error) {
+	query := `
+		SELECT b.id,
+		       b.owner_user_id,
+		       b.name,
+		       b.visibility,
+		       b.is_listed,
+		       COALESCE(b.stock_symbol, ''),
+		       b.strategy,
+		       b.base_revenue_micros,
+		       b.marketing_level,
+		       b.rd_level,
+		       b.automation_level,
+		       b.compliance_level,
+		       b.brand_bps,
+		       b.operational_health_bps,
+		       b.cash_reserve_micros,
+		       COALESCE(be.employee_revenue, 0) AS employee_revenue,
+		       COALESCE(be.employee_count, 0) AS employee_count,
+		       COALESCE(be.avg_risk_bps, 0) AS avg_risk_bps,
+		       COALESCE(be.ops_count, 0) AS ops_count,
+		       COALESCE(be.engineer_count, 0) AS engineer_count,
+		       COALESCE(be.product_count, 0) AS product_count,
+		       COALESCE(be.sales_count, 0) AS sales_count,
+		       COALESCE(be.growth_count, 0) AS growth_count,
+		       COALESCE(be.finance_count, 0) AS finance_count,
+		       COALESCE(be.legal_count, 0) AS legal_count,
+		       COALESCE(be.design_count, 0) AS design_count,
+		       COALESCE(m.output_bonus, 0) AS machine_output,
+		       COALESCE(m.upkeep, 0) AS machine_upkeep,
+		       COALESCE(l.loan_interest, 0) AS loan_interest,
+		       bs.id,
+		       COALESCE(bs.current_price_micros, 0),
+		       COALESCE(bs.anchor_price_micros, 0)
+		FROM game.businesses b
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(SUM(be.revenue_per_tick_micros), 0) AS employee_revenue,
+			       COUNT(1) AS employee_count,
+			       COALESCE(AVG(be.risk_bps), 0) AS avg_risk_bps,
+			       COALESCE(SUM(CASE WHEN be.role = 'ops' THEN 1 ELSE 0 END), 0) AS ops_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'engineer' THEN 1 ELSE 0 END), 0) AS engineer_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'product' THEN 1 ELSE 0 END), 0) AS product_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'sales' THEN 1 ELSE 0 END), 0) AS sales_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'growth' THEN 1 ELSE 0 END), 0) AS growth_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'finance' THEN 1 ELSE 0 END), 0) AS finance_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'legal' THEN 1 ELSE 0 END), 0) AS legal_count,
+			       COALESCE(SUM(CASE WHEN be.role = 'design' THEN 1 ELSE 0 END), 0) AS design_count
+			FROM game.business_employees be
+			WHERE be.business_id = b.id AND be.season_id = b.season_id
+		) be ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(SUM(bm.output_bonus_micros), 0) AS output_bonus,
+			       COALESCE(SUM(bm.upkeep_micros), 0) AS upkeep
+			FROM game.business_machinery bm
+			WHERE bm.business_id = b.id AND bm.season_id = b.season_id
+		) m ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(SUM((bl.outstanding_micros * bl.interest_bps) / 10000), 0) AS loan_interest
+			FROM game.business_loans bl
+			WHERE bl.business_id = b.id AND bl.season_id = b.season_id AND bl.status = 'open'
+		) l ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT s.id, s.current_price_micros, s.anchor_price_micros
+			FROM game.stocks s
+			WHERE s.business_id = b.id AND s.season_id = b.season_id
+			ORDER BY s.id
+			LIMIT 1
+		) bs ON TRUE
+		WHERE b.season_id = $1
+	`
+	args := []any{seasonID}
+	if ownerUserID != "" {
+		query += " AND b.owner_user_id = $2"
+		args = append(args, ownerUserID)
+		if businessID != nil {
+			query += " AND b.id = $3"
+			args = append(args, *businessID)
 		}
-		if len(rows) > 0 {
-			_, err := tx.CopyFrom(
-				ctx,
-				pgx.Identifier{"game", "employee_candidates"},
-				[]string{"season_id", "full_name", "role", "trait", "hire_cost_micros", "revenue_per_tick_micros", "risk_bps"},
-				pgx.CopyFromRows(rows),
-			)
-			if err != nil {
-				return err
-			}
+	} else if businessID != nil {
+		query += " AND b.id = $2"
+		args = append(args, *businessID)
+	}
+	query += " ORDER BY b.id"
+
+	rows, err := tx.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]businessCycle, 0)
+	for rows.Next() {
+		var c businessCycle
+		var stockID sql.NullInt64
+		if err := rows.Scan(
+			&c.businessID, &c.userID, &c.name, &c.visibility, &c.isListed, &c.stockSymbol, &c.strategy,
+			&c.baseRevenue, &c.marketingLevel, &c.rdLevel, &c.automationLevel, &c.complianceLevel,
+			&c.brandBps, &c.healthBps, &c.reserveMicros,
+			&c.employeeRevenue, &c.employeeCount, &c.avgRiskBps,
+			&c.opsCount, &c.engineerCount, &c.productCount, &c.salesCount, &c.growthCount, &c.financeCount, &c.legalCount, &c.designCount,
+			&c.machineOutput, &c.machineUpkeep, &c.loanInterest,
+			&stockID, &c.stockPrice, &c.stockAnchorPrice,
+		); err != nil {
+			return nil, err
+		}
+		if stockID.Valid {
+			id := stockID.Int64
+			c.stockID = &id
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func projectBusinessCycle(c businessCycle) businessProjection {
+	empEfficiency := 1.0
+	if c.employeeCount > 12 {
+		empEfficiency -= float64(c.employeeCount-12) * 0.015
+		if empEfficiency < 0.55 {
+			empEfficiency = 0.55
 		}
 	}
+	employeeRevenue := int64(math.Round(float64(c.employeeRevenue) * empEfficiency))
+	team := analyzeWorkforce(workforceProfile{
+		EmployeeCount:   c.employeeCount,
+		OpsCount:        c.opsCount,
+		EngineerCount:   c.engineerCount,
+		ProductCount:    c.productCount,
+		SalesCount:      c.salesCount,
+		GrowthCount:     c.growthCount,
+		FinanceCount:    c.financeCount,
+		LegalCount:      c.legalCount,
+		DesignCount:     c.designCount,
+		MarketingLevel:  c.marketingLevel,
+		RDLevel:         c.rdLevel,
+		AutomationLevel: c.automationLevel,
+		ComplianceLevel: c.complianceLevel,
+	})
 
-	return tx.Commit(ctx)
+	autoBoost := 1.0 + float64(c.automationLevel)*0.04
+	marketingBoost := 1.0 + float64(c.marketingLevel)*0.04
+	rdBoost := 1.0 + float64(c.rdLevel)*0.03
+	brandBoost := 0.88 + float64(c.brandBps)/8000.0
+	healthBoost := 0.85 + float64(c.healthBps)/9000.0
+
+	upkeepCut := math.Min(0.40, float64(c.automationLevel)*0.02)
+	machineOutput := int64(math.Round(float64(c.machineOutput) * autoBoost))
+	machineUpkeep := int64(math.Round(float64(c.machineUpkeep) * (1 - upkeepCut) * team.MachineUpkeepFactor))
+
+	preMultiplierGross := c.baseRevenue + employeeRevenue + machineOutput
+	gross := int64(math.Round(float64(preMultiplierGross) * marketingBoost * rdBoost * brandBoost * healthBoost * team.RevenueMultiplier))
+	if c.visibility == "public" {
+		gross = int64(math.Round(float64(gross) * 1.04))
+	}
+	if c.isListed {
+		gross = int64(math.Round(float64(gross) * 1.05))
+	}
+
+	strategyRevenue := 1.0
+	strategyRisk := 1.0
+	switch c.strategy {
+	case "aggressive":
+		strategyRevenue = 1.16
+		strategyRisk = 1.35
+	case "defensive":
+		strategyRevenue = 0.94
+		strategyRisk = 0.78
+	}
+	gross = int64(math.Round(float64(gross) * strategyRevenue))
+
+	stockSentiment := 0.0
+	if c.stockID != nil && c.stockAnchorPrice > 0 {
+		stockSentiment = float64(c.stockPrice-c.stockAnchorPrice) / float64(c.stockAnchorPrice)
+		if stockSentiment > 0.20 {
+			stockSentiment = 0.20
+		}
+		if stockSentiment < -0.20 {
+			stockSentiment = -0.20
+		}
+		gross = int64(math.Round(float64(gross) * (1 + stockSentiment*0.35)))
+	}
+
+	riskFactor := c.avgRiskBps / 10000.0
+	compShield := 1.0 - math.Min(0.45, float64(c.complianceLevel)*0.03)
+	riskPenalty := int64(math.Round(float64(max64(gross, 0)) * riskFactor * 0.38 * compShield * strategyRisk * team.RiskMultiplier))
+
+	salaryCost := int64(math.Round(float64(c.employeeCount) * (11 + float64(c.marketingLevel+c.rdLevel+c.automationLevel+c.complianceLevel)*0.8) * float64(MicrosPerStonky)))
+	machineryMaintenance := machineUpkeep
+	upgradeBurn := int64((int64(c.marketingLevel)*5 + int64(c.rdLevel)*5 + int64(c.automationLevel)*4 + int64(c.complianceLevel)*4) * MicrosPerStonky)
+	totalCosts := salaryCost + machineryMaintenance + c.loanInterest + upgradeBurn + riskPenalty
+
+	return businessProjection{
+		GrossRevenueMicros:   gross,
+		OperatingCostsMicros: totalCosts,
+		RevenuePerTickMicros: gross - totalCosts,
+		MachineOutputMicros:  machineOutput,
+		MachineUpkeepMicros:  machineUpkeep,
+	}
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) (Dashboard, error) {
@@ -633,6 +855,13 @@ func (s *Service) HireEmployee(ctx context.Context, in HireEmployeeInput) error 
 	if ownerID != in.UserID {
 		return ErrUnauthorized
 	}
+	currentEmployees, err := businessEmployeeCountTx(ctx, tx, in.BusinessID, in.SeasonID)
+	if err != nil {
+		return err
+	}
+	if currentEmployees >= MaxBusinessEmployees {
+		return ErrEmployeeLimitReached
+	}
 
 	var candidateName, role, trait string
 	var cost, revenue int64
@@ -698,6 +927,7 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 	if strategy == "" {
 		strategy = "best_value"
 	}
+	outerOrderBy := strings.ReplaceAll(orderBy, "ec.", "")
 
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -721,6 +951,21 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 	if ownerID != in.UserID {
 		return out, ErrUnauthorized
 	}
+	currentEmployees, err := businessEmployeeCountTx(ctx, tx, in.BusinessID, in.SeasonID)
+	if err != nil {
+		return out, err
+	}
+	if currentEmployees >= MaxBusinessEmployees {
+		return out, ErrEmployeeLimitReached
+	}
+	remainingSlots := int(MaxBusinessEmployees - currentEmployees)
+	if remainingSlots <= 0 {
+		return out, ErrEmployeeLimitReached
+	}
+	selectionLimit := in.Count
+	if selectionLimit > remainingSlots {
+		selectionLimit = remainingSlots
+	}
 
 	var balance, peak int64
 	if err := tx.QueryRow(ctx, `
@@ -733,17 +978,24 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 	}
 
 	rows, err := tx.Query(ctx, `
-		SELECT ec.id, ec.full_name, ec.role, ec.trait, ec.hire_cost_micros, ec.revenue_per_tick_micros, ec.risk_bps
-		FROM game.employee_candidates ec
-		LEFT JOIN game.business_employees be
-			ON be.business_id = $1
-		   AND be.season_id = $2
-		   AND be.source_candidate_id = ec.id
-		WHERE ec.season_id = $2
-		  AND be.id IS NULL
-		ORDER BY `+orderBy+`
-		LIMIT $3
-	`, in.BusinessID, in.SeasonID, in.Count)
+		WITH ranked AS (
+			SELECT ec.id, ec.full_name, ec.role, ec.trait, ec.hire_cost_micros, ec.revenue_per_tick_micros, ec.risk_bps,
+			       SUM(ec.hire_cost_micros) OVER (ORDER BY `+orderBy+`) AS running_cost
+			FROM game.employee_candidates ec
+			LEFT JOIN game.business_employees be
+				ON be.business_id = $1
+			   AND be.season_id = $2
+			   AND be.source_candidate_id = ec.id
+			WHERE ec.season_id = $2
+			  AND be.id IS NULL
+			ORDER BY `+orderBy+`
+			LIMIT $3
+		)
+		SELECT id, full_name, role, trait, hire_cost_micros, revenue_per_tick_micros, risk_bps
+		FROM ranked
+		WHERE $4 - running_cost >= $5
+		ORDER BY `+outerOrderBy+`
+	`, in.BusinessID, in.SeasonID, selectionLimit, balance, -DebtLimitFromPeak(peak))
 	if err != nil {
 		return out, err
 	}
@@ -773,28 +1025,35 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 		return out, fmt.Errorf("no candidates available to hire")
 	}
 
-	budgetFloor := -DebtLimitFromPeak(peak)
 	totalCost := int64(0)
 	hiredIDs := make([]int64, 0, len(shortlist))
 	hiredNames := make([]string, 0, len(shortlist))
+	copyRows := make([][]any, 0, len(shortlist))
 	for _, pick := range shortlist {
-		if balance-(totalCost+pick.Cost) < budgetFloor {
-			continue
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO game.business_employees
-			    (business_id, season_id, source_candidate_id, full_name, role, trait, revenue_per_tick_micros, risk_bps)
-			VALUES
-			    ($1, $2, $3, $4, $5, $6, $7, $8)
-		`, in.BusinessID, in.SeasonID, pick.ID, pick.Name, pick.Role, pick.Trait, pick.Revenue, pick.Risk); err != nil {
-			return out, err
-		}
 		totalCost += pick.Cost
 		hiredIDs = append(hiredIDs, pick.ID)
 		hiredNames = append(hiredNames, pick.Name)
+		copyRows = append(copyRows, []any{
+			in.BusinessID,
+			in.SeasonID,
+			pick.ID,
+			pick.Name,
+			pick.Role,
+			pick.Trait,
+			pick.Revenue,
+			pick.Risk,
+		})
 	}
 	if len(hiredIDs) == 0 {
 		return out, ErrInsufficientFunds
+	}
+	if _, err := tx.CopyFrom(
+		ctx,
+		pgx.Identifier{"game", "business_employees"},
+		[]string{"business_id", "season_id", "source_candidate_id", "full_name", "role", "trait", "revenue_per_tick_micros", "risk_bps"},
+		pgx.CopyFromRows(copyRows),
+	); err != nil {
+		return out, err
 	}
 
 	balance -= totalCost
@@ -819,10 +1078,18 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 	out["strategy"] = strategy
 	out["requested_count"] = in.Count
 	out["hired_count"] = len(hiredIDs)
-	out["hired_candidate_ids"] = hiredIDs
-	out["hired_names"] = hiredNames
 	out["total_cost_micros"] = totalCost
 	out["new_balance_micros"] = balance
+	out["employee_limit"] = MaxBusinessEmployees
+	out["employee_count"] = currentEmployees + int64(len(hiredIDs))
+	out["employee_slots_remaining"] = MaxBusinessEmployees - (currentEmployees + int64(len(hiredIDs)))
+	if len(hiredIDs) <= 25 {
+		out["hired_candidate_ids"] = hiredIDs
+		out["hired_names"] = hiredNames
+	} else {
+		out["hired_candidate_preview_ids"] = hiredIDs[:25]
+		out["hired_name_preview"] = hiredNames[:25]
+	}
 	return out, nil
 }
 
@@ -1210,7 +1477,7 @@ func (s *Service) ReplaySync(ctx context.Context, userID string, seasonID int64,
 	return results, nil
 }
 
-func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery time.Duration, interestAPR float64, volatility string) error {
+func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery time.Duration, employeePerTick int, interestAPR float64, volatility string) error {
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
@@ -1317,11 +1584,75 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 	if err := applyDebtInterestTx(ctx, tx, seasonID, tickEvery, interestAPR); err != nil {
 		return err
 	}
+	if err := appendEmployeeCandidatesTx(ctx, tx, seasonID, employeePerTick); err != nil {
+		return err
+	}
 	if err := updateSeasonPeakNetWorthTx(ctx, tx, seasonID); err != nil {
 		return err
 	}
 
 	return tx.Commit(ctx)
+}
+
+func businessEmployeeCountTx(ctx context.Context, tx pgx.Tx, businessID, seasonID int64) (int64, error) {
+	var count int64
+	err := tx.QueryRow(ctx, `
+		SELECT COUNT(1)
+		FROM game.business_employees
+		WHERE business_id = $1 AND season_id = $2
+	`, businessID, seasonID).Scan(&count)
+	return count, err
+}
+
+func ensureMinimumEmployeeCandidatesTx(ctx context.Context, tx pgx.Tx, seasonID int64, minimum int) error {
+	if minimum <= 0 {
+		return nil
+	}
+	var current int
+	if err := tx.QueryRow(ctx, `SELECT COUNT(1) FROM game.employee_candidates WHERE season_id = $1`, seasonID).Scan(&current); err != nil {
+		return err
+	}
+	if current >= minimum {
+		return nil
+	}
+	return insertGeneratedEmployeeCandidatesTx(ctx, tx, seasonID, current, minimum-current)
+}
+
+func appendEmployeeCandidatesTx(ctx context.Context, tx pgx.Tx, seasonID int64, count int) error {
+	if count <= 0 {
+		return nil
+	}
+	var current int
+	if err := tx.QueryRow(ctx, `SELECT COUNT(1) FROM game.employee_candidates WHERE season_id = $1`, seasonID).Scan(&current); err != nil {
+		return err
+	}
+	return insertGeneratedEmployeeCandidatesTx(ctx, tx, seasonID, current, count)
+}
+
+func insertGeneratedEmployeeCandidatesTx(ctx context.Context, tx pgx.Tx, seasonID int64, start, count int) error {
+	if count <= 0 {
+		return nil
+	}
+	candidates := candidatePool(start, count)
+	rows := make([][]any, 0, len(candidates))
+	for _, pick := range candidates {
+		rows = append(rows, []any{
+			seasonID,
+			pick.Name,
+			pick.Role,
+			pick.Trait,
+			pick.Cost,
+			pick.Revenue,
+			pick.RiskBps,
+		})
+	}
+	_, err := tx.CopyFrom(
+		ctx,
+		pgx.Identifier{"game", "employee_candidates"},
+		[]string{"season_id", "full_name", "role", "trait", "hire_cost_micros", "revenue_per_tick_micros", "risk_bps"},
+		pgx.CopyFromRows(rows),
+	)
+	return err
 }
 
 func applyDebtInterestTx(ctx context.Context, tx pgx.Tx, seasonID int64, tickEvery time.Duration, apr float64) error {

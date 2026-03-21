@@ -16,6 +16,7 @@ type APIConfig struct {
 	MarketTickEvery   time.Duration
 	EmployeePerTick   int
 	NewStocksPerTick  int
+	NewStocksEvery    time.Duration
 	MarketVolatility  string
 	InterestAPR       float64
 	StartupSeedStocks bool
@@ -43,6 +44,7 @@ func LoadAPIFromEnv() (APIConfig, error) {
 		MarketTickEvery:   envDurationDefault("STANKS_MARKET_TICK_EVERY", 5*time.Minute),
 		EmployeePerTick:   envIntDefaultAlias([]string{"EMPLOYEE_PER_TICK", "employee_per_tick"}, 1),
 		NewStocksPerTick:  envIntDefaultAlias([]string{"NEW_STOCKS_PER_TICK", "new_stocks_per_tick"}, 0),
+		NewStocksEvery:    envFlexibleDurationDefault([]string{"NEW_STOCKS_EVERY", "new_stocks_every"}, 0),
 		MarketVolatility:  envVolatilityDefault(),
 		InterestAPR:       envFloatDefault("STANKS_INTEREST_APR", 0.18),
 		StartupSeedStocks: envBoolDefault("STANKS_STARTUP_SEED_STOCKS", true),
@@ -117,6 +119,21 @@ func envFloatDefault(key string, fallback float64) float64 {
 	return f
 }
 
+func envFlexibleDurationDefault(keys []string, fallback time.Duration) time.Duration {
+	for _, key := range keys {
+		v := strings.TrimSpace(os.Getenv(key))
+		if v == "" {
+			continue
+		}
+		d, err := parseFlexibleDuration(v)
+		if err != nil {
+			return fallback
+		}
+		return d
+	}
+	return fallback
+}
+
 func envIntDefaultAlias(keys []string, fallback int) int {
 	for _, key := range keys {
 		v := strings.TrimSpace(os.Getenv(key))
@@ -130,6 +147,38 @@ func envIntDefaultAlias(keys []string, fallback int) int {
 		return n
 	}
 	return fallback
+}
+
+func parseFlexibleDuration(raw string) (time.Duration, error) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" {
+		return 0, fmt.Errorf("empty duration")
+	}
+	if d, err := time.ParseDuration(v); err == nil {
+		return d, nil
+	}
+	switch {
+	case strings.HasSuffix(v, "min"):
+		n, err := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(v, "min")))
+		if err != nil {
+			return 0, err
+		}
+		return time.Duration(n) * time.Minute, nil
+	case strings.HasSuffix(v, "hr"):
+		n, err := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(v, "hr")))
+		if err != nil {
+			return 0, err
+		}
+		return time.Duration(n) * time.Hour, nil
+	case strings.HasSuffix(v, "d"):
+		n, err := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(v, "d")))
+		if err != nil {
+			return 0, err
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	default:
+		return 0, fmt.Errorf("unsupported duration")
+	}
 }
 
 func envBoolDefault(key string, fallback bool) bool {

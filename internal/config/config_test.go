@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestNormalizeCLIBaseURL(t *testing.T) {
 	tests := []struct {
@@ -74,5 +77,27 @@ func TestLoadAPIFromEnvNewStocksPerTickAlias(t *testing.T) {
 	}
 	if cfg.NewStocksPerTick != 9 {
 		t.Fatalf("LoadAPIFromEnv().NewStocksPerTick = %d, want 9", cfg.NewStocksPerTick)
+	}
+}
+
+func TestParseFlexibleDuration(t *testing.T) {
+	tests := []struct {
+		in   string
+		want time.Duration
+	}{
+		{in: "5s", want: 5 * time.Second},
+		{in: "7min", want: 7 * time.Minute},
+		{in: "2hr", want: 2 * time.Hour},
+		{in: "3d", want: 72 * time.Hour},
+	}
+
+	for _, tt := range tests {
+		got, err := parseFlexibleDuration(tt.in)
+		if err != nil {
+			t.Fatalf("parseFlexibleDuration(%q) error = %v", tt.in, err)
+		}
+		if got != tt.want {
+			t.Fatalf("parseFlexibleDuration(%q) = %v, want %v", tt.in, got, tt.want)
+		}
 	}
 }

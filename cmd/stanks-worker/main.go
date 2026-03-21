@@ -47,7 +47,11 @@ func main() {
 
 	runOnce := strings.EqualFold(strings.TrimSpace(os.Getenv("STANKS_WORKER_RUN_ONCE")), "true")
 	if runOnce {
-		if err := svc.RunMarketTick(ctx, seasonID, cfg.MarketTickEvery, cfg.EmployeePerTick, cfg.NewStocksPerTick, cfg.InterestAPR, cfg.MarketVolatility); err != nil {
+		stocksThisTick := cfg.NewStocksPerTick
+		if cfg.NewStocksEvery > 0 {
+			stocksThisTick = 0
+		}
+		if err := svc.RunMarketTick(ctx, seasonID, cfg.MarketTickEvery, cfg.EmployeePerTick, stocksThisTick, cfg.InterestAPR, cfg.MarketVolatility); err != nil {
 			logger.Error("tick failed", "err", err)
 			os.Exit(1)
 		}
@@ -58,7 +62,8 @@ func main() {
 	ticker := time.NewTicker(cfg.MarketTickEvery)
 	defer ticker.Stop()
 
-	logger.Info("worker started", "tick_every", cfg.MarketTickEvery.String(), "employee_per_tick", cfg.EmployeePerTick, "new_stocks_per_tick", cfg.NewStocksPerTick, "volatility", cfg.MarketVolatility)
+	lastStocksSpawnAt := time.Time{}
+	logger.Info("worker started", "tick_every", cfg.MarketTickEvery.String(), "employee_per_tick", cfg.EmployeePerTick, "new_stocks_per_tick", cfg.NewStocksPerTick, "new_stocks_every", cfg.NewStocksEvery.String(), "volatility", cfg.MarketVolatility)
 	for {
 		select {
 		case <-ctx.Done():
@@ -70,9 +75,20 @@ func main() {
 				logger.Error("season read failed", "err", err)
 				continue
 			}
-			if err := svc.RunMarketTick(ctx, seasonID, cfg.MarketTickEvery, cfg.EmployeePerTick, cfg.NewStocksPerTick, cfg.InterestAPR, cfg.MarketVolatility); err != nil {
+			stocksThisTick := 0
+			if cfg.NewStocksPerTick > 0 {
+				if cfg.NewStocksEvery <= 0 {
+					stocksThisTick = cfg.NewStocksPerTick
+				} else if lastStocksSpawnAt.IsZero() || time.Since(lastStocksSpawnAt) >= cfg.NewStocksEvery {
+					stocksThisTick = cfg.NewStocksPerTick
+				}
+			}
+			if err := svc.RunMarketTick(ctx, seasonID, cfg.MarketTickEvery, cfg.EmployeePerTick, stocksThisTick, cfg.InterestAPR, cfg.MarketVolatility); err != nil {
 				logger.Error("market tick failed", "err", err)
 				continue
+			}
+			if stocksThisTick > 0 {
+				lastStocksSpawnAt = time.Now()
 			}
 			logger.Info("market tick complete", "season_id", seasonID)
 		}

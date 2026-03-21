@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1586,65 +1585,16 @@ func confirmWalletSpend(ctx context.Context, client *cl.Client, accessToken stri
 	return nil
 }
 
-func estimateEmployeeHireCost(ctx context.Context, client *cl.Client, accessToken string, count int64, strategy string) (int64, error) {
-	raw, err := client.ListEmployeeCandidates(ctx, accessToken)
+func estimateEmployeeHireCost(ctx context.Context, client *cl.Client, accessToken string, businessID, count int64, strategy string) (int64, error) {
+	raw, err := client.QuoteHireEmployeesBulk(ctx, accessToken, businessID, int(count), strategy)
 	if err != nil {
 		return 0, err
 	}
-	payload, err := decodeInto[candidatesPayload](raw)
-	if err != nil {
-		return 0, err
-	}
-	candidates := payload.Candidates
-	switch strings.ToLower(strings.TrimSpace(strategy)) {
-	case "", "best_value":
-		sort.Slice(candidates, func(i, j int) bool {
-			li := float64(candidates[i].RevenuePerTickMicros) / float64(maxInt64(candidates[i].HireCostMicros, 1))
-			lj := float64(candidates[j].RevenuePerTickMicros) / float64(maxInt64(candidates[j].HireCostMicros, 1))
-			if li == lj {
-				if candidates[i].RiskBps == candidates[j].RiskBps {
-					return candidates[i].ID < candidates[j].ID
-				}
-				return candidates[i].RiskBps < candidates[j].RiskBps
-			}
-			return li > lj
-		})
-	case "high_output":
-		sort.Slice(candidates, func(i, j int) bool {
-			if candidates[i].RevenuePerTickMicros == candidates[j].RevenuePerTickMicros {
-				if candidates[i].RiskBps == candidates[j].RiskBps {
-					return candidates[i].ID < candidates[j].ID
-				}
-				return candidates[i].RiskBps < candidates[j].RiskBps
-			}
-			return candidates[i].RevenuePerTickMicros > candidates[j].RevenuePerTickMicros
-		})
-	case "low_risk":
-		sort.Slice(candidates, func(i, j int) bool {
-			if candidates[i].RiskBps == candidates[j].RiskBps {
-				if candidates[i].RevenuePerTickMicros == candidates[j].RevenuePerTickMicros {
-					return candidates[i].ID < candidates[j].ID
-				}
-				return candidates[i].RevenuePerTickMicros > candidates[j].RevenuePerTickMicros
-			}
-			return candidates[i].RiskBps < candidates[j].RiskBps
-		})
-	default:
-		return 0, fmt.Errorf("invalid strategy")
-	}
-	limit := int(count)
-	if limit > len(candidates) {
-		limit = len(candidates)
-	}
-	var total int64
-	for i := 0; i < limit; i++ {
-		total += candidates[i].HireCostMicros
-	}
-	return total, nil
+	return int64Field(raw, "estimated_cost_micros"), nil
 }
 
 func hireEmployeesWithConfirmation(ctx context.Context, client *cl.Client, accessToken string, businessID, count int64, strategy string) error {
-	estimatedCost, err := estimateEmployeeHireCost(ctx, client, accessToken, count, strategy)
+	estimatedCost, err := estimateEmployeeHireCost(ctx, client, accessToken, businessID, count, strategy)
 	if err != nil {
 		return err
 	}
@@ -1757,13 +1707,6 @@ func estimateFundBuyCost(ctx context.Context, client *cl.Client, accessToken, co
 		return notional + fee, nil
 	}
 	return 0, fmt.Errorf("fund not found")
-}
-
-func maxInt64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func newBusinessReserveCmd(apiBase *string) *cobra.Command {

@@ -85,6 +85,7 @@ func (s *Server) routes() {
 			r.Get("/businesses/{id}/employees", s.handleBusinessEmployees)
 			r.Get("/businesses/employees/candidates", s.handleEmployeeCandidates)
 			r.Post("/businesses/{id}/employees/hire", s.handleHireEmployee)
+			r.Post("/businesses/{id}/employees/hire-batch/quote", s.handleHireEmployeesBatchQuote)
 			r.Post("/businesses/{id}/employees/hire-batch", s.handleHireEmployeesBatch)
 			r.Post("/businesses/{id}/employees/{employee_id}/train", s.handleTrainProfessional)
 			r.Get("/businesses/{id}/machinery", s.handleBusinessMachinery)
@@ -439,6 +440,44 @@ func (s *Server) handleHireEmployeesBatch(w http.ResponseWriter, r *http.Request
 		Count:          in.Count,
 		Strategy:       in.Strategy,
 		IdempotencyKey: idempotencyKey(r),
+	})
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleHireEmployeesBatchQuote(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	var in struct {
+		Count    int    `json:"count"`
+		Strategy string `json:"strategy"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.game.QuoteHireEmployeesBulk(r.Context(), game.BulkHireEmployeesInput{
+		UserID:     user.UserID,
+		SeasonID:   seasonID,
+		BusinessID: businessID,
+		Count:      in.Count,
+		Strategy:   in.Strategy,
 	})
 	if err != nil {
 		writeDomainError(w, err)

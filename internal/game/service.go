@@ -1002,49 +1002,8 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 			`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
 				return err
 			}
-
-			rows, err := tx.Query(ctx, `
-				WITH ranked AS (
-					SELECT ec.id, ec.full_name, ec.role, ec.trait, ec.hire_cost_micros, ec.revenue_per_tick_micros, ec.risk_bps,
-					       SUM(ec.hire_cost_micros) OVER (ORDER BY `+orderBy+`) AS running_cost
-					FROM game.employee_candidates ec
-					LEFT JOIN game.business_employees be
-						ON be.business_id = $1
-					   AND be.season_id = $2
-					   AND be.source_candidate_id = ec.id
-					WHERE ec.season_id = $2
-					  AND be.id IS NULL
-					ORDER BY `+orderBy+`
-					LIMIT $3
-				)
-				SELECT id, full_name, role, trait, hire_cost_micros, revenue_per_tick_micros, risk_bps
-				FROM ranked
-				WHERE $4 - running_cost >= $5
-				ORDER BY `+outerOrderBy+`
-			`, in.BusinessID, in.SeasonID, selectionLimit, balance, -DebtLimitFromPeak(peak))
+			shortlist, err := selectHireShortlistTx(ctx, tx, in.BusinessID, in.SeasonID, selectionLimit, orderBy, outerOrderBy, balance, peak)
 			if err != nil {
-				return err
-			}
-			defer rows.Close()
-
-			type hirePick struct {
-				ID      int64
-				Name    string
-				Role    string
-				Trait   string
-				Cost    int64
-				Revenue int64
-				Risk    int32
-			}
-			shortlist := make([]hirePick, 0, in.Count)
-			for rows.Next() {
-				var pick hirePick
-				if err := rows.Scan(&pick.ID, &pick.Name, &pick.Role, &pick.Trait, &pick.Cost, &pick.Revenue, &pick.Risk); err != nil {
-					return err
-				}
-				shortlist = append(shortlist, pick)
-			}
-			if err := rows.Err(); err != nil {
 				return err
 			}
 			if len(shortlist) == 0 {
@@ -1137,6 +1096,155 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 		}
 	}
 	return out, ErrTxConflict
+}
+
+func (s *Service) QuoteHireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInput) (map[string]any, error) {
+	out := map[string]any{}
+	if in.Count <= 0 {
+		return out, fmt.Errorf("count must be > 0")
+	}
+	strategy := strings.ToLower(strings.TrimSpace(in.Strategy))
+	orderBy, err := bulkHireOrder(strategy)
+	if err != nil {
+		return out, err
+	}
+	if strategy == "" {
+		strategy = "best_value"
+	}
+	outerOrderBy := strings.ReplaceAll(orderBy, "ec.", "")
+
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return out, err
+	}
+	defer tx.Rollback(ctx)
+
+	var ownerID string
+	var employeeLimit int64
+	if err := tx.QueryRow(ctx, `
+		SELECT owner_user_id, seat_capacity
+		FROM game.businesses
+		WHERE id = $1 AND season_id = $2
+	`, in.BusinessID, in.SeasonID).Scan(&ownerID, &employeeLimit); err != nil {
+		return out, err
+	}
+	if ownerID != in.UserID {
+		return out, ErrUnauthorized
+	}
+	employeeLimit = effectiveEmployeeLimit(employeeLimit)
+
+	currentEmployees, err := businessEmployeeCountTx(ctx, tx, in.BusinessID, in.SeasonID)
+	if err != nil {
+		return out, err
+	}
+	if currentEmployees >= employeeLimit {
+		return out, ErrEmployeeLimitReached
+	}
+	remainingSlots := int(employeeLimit - currentEmployees)
+	if remainingSlots <= 0 {
+		return out, ErrEmployeeLimitReached
+	}
+	selectionLimit := in.Count
+	if selectionLimit > remainingSlots {
+		selectionLimit = remainingSlots
+	}
+
+	var balance, peak int64
+	if err := tx.QueryRow(ctx, `
+		SELECT balance_micros, peak_net_worth_micros
+		FROM game.wallets
+		WHERE user_id = $1 AND season_id = $2
+	`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+		return out, err
+	}
+
+	shortlist, err := selectHireShortlistTx(ctx, tx, in.BusinessID, in.SeasonID, selectionLimit, orderBy, outerOrderBy, balance, peak)
+	if err != nil {
+		return out, err
+	}
+
+	estimatedCost := int64(0)
+	previewLimit := 10
+	if previewLimit > len(shortlist) {
+		previewLimit = len(shortlist)
+	}
+	previewNames := make([]string, 0, previewLimit)
+	for i, pick := range shortlist {
+		estimatedCost += pick.Cost
+		if i < previewLimit {
+			previewNames = append(previewNames, pick.Name)
+		}
+	}
+
+	out = map[string]any{
+		"ok":                       true,
+		"strategy":                 strategy,
+		"requested_count":          in.Count,
+		"estimated_hire_count":     len(shortlist),
+		"estimated_cost_micros":    estimatedCost,
+		"balance_micros":           balance,
+		"remaining_balance_micros": balance - estimatedCost,
+		"employee_limit":           employeeLimit,
+		"employee_count":           currentEmployees,
+		"employee_slots_remaining": employeeLimit - currentEmployees,
+	}
+	if len(previewNames) > 0 {
+		out["candidate_name_preview"] = previewNames
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+type hirePick struct {
+	ID      int64
+	Name    string
+	Role    string
+	Trait   string
+	Cost    int64
+	Revenue int64
+	Risk    int32
+}
+
+func selectHireShortlistTx(ctx context.Context, tx pgx.Tx, businessID, seasonID int64, selectionLimit int, orderBy, outerOrderBy string, balance, peak int64) ([]hirePick, error) {
+	rows, err := tx.Query(ctx, `
+		WITH ranked AS (
+			SELECT ec.id, ec.full_name, ec.role, ec.trait, ec.hire_cost_micros, ec.revenue_per_tick_micros, ec.risk_bps,
+			       SUM(ec.hire_cost_micros) OVER (ORDER BY `+orderBy+`) AS running_cost
+			FROM game.employee_candidates ec
+			LEFT JOIN game.business_employees be
+				ON be.business_id = $1
+			   AND be.season_id = $2
+			   AND be.source_candidate_id = ec.id
+			WHERE ec.season_id = $2
+			  AND be.id IS NULL
+			ORDER BY `+orderBy+`
+			LIMIT $3
+		)
+		SELECT id, full_name, role, trait, hire_cost_micros, revenue_per_tick_micros, risk_bps
+		FROM ranked
+		WHERE $4 - running_cost >= $5
+		ORDER BY `+outerOrderBy+`
+	`, businessID, seasonID, selectionLimit, balance, -DebtLimitFromPeak(peak))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	shortlist := make([]hirePick, 0, selectionLimit)
+	for rows.Next() {
+		var pick hirePick
+		if err := rows.Scan(&pick.ID, &pick.Name, &pick.Role, &pick.Trait, &pick.Cost, &pick.Revenue, &pick.Risk); err != nil {
+			return nil, err
+		}
+		shortlist = append(shortlist, pick)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return shortlist, nil
 }
 
 func (s *Service) ListEmployeeCandidates(ctx context.Context, seasonID int64) ([]map[string]any, error) {

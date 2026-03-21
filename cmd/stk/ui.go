@@ -270,19 +270,19 @@ func renderDashboard(raw map[string]any) error {
 	if len(d.Businesses) == 0 {
 		printInfo("No businesses yet.")
 	} else {
-		fmt.Printf("%-6s %-20s %-9s %-8s %-10s %10s %8s %12s %12s %12s %10s\n", "ID", "NAME", "VISIBILITY", "LISTED", "STRATEGY", "EMPLOYEES", "MACH", "REV/TICK", "UPKEEP", "LOANS", "RESERVE")
+		fmt.Printf("%-6s %-20s %-9s %-8s %-10s %17s %8s %12s %12s %12s %10s\n", "ID", "NAME", "VISIBILITY", "LISTED", "STRATEGY", "EMPLOYEES/CAP", "MACH", "REV/TICK", "UPKEEP", "LOANS", "RESERVE")
 		for _, b := range d.Businesses {
 			listed := "no"
 			if b.IsListed {
 				listed = "yes"
 			}
-			fmt.Printf("%-6d %-20s %-9s %-8s %-10s %10d %8d %12s %12s %12s %10s\n",
+			fmt.Printf("%-6d %-20s %-9s %-8s %-10s %17s %8d %12s %12s %12s %10s\n",
 				b.ID,
 				truncate(b.Name, 20),
 				b.Visibility,
 				listed,
 				truncate(b.Strategy, 10),
-				b.EmployeeCount,
+				fmt.Sprintf("%d/%d", b.EmployeeCount, b.EmployeeLimit),
 				b.MachineryCount,
 				formatMicros(b.RevenuePerTickMicros),
 				formatMicros(b.MachineryUpkeepMicros),
@@ -391,8 +391,11 @@ func renderBusinessState(raw map[string]any) error {
 	fmt.Printf("Visibility:  %s\n", out.Visibility)
 	fmt.Printf("Listed:      %t\n", out.IsListed)
 	fmt.Printf("Strategy:    %s\n", out.Strategy)
-	fmt.Printf("Employees:   %d\n", out.EmployeeCount)
+	fmt.Printf("Employees:   %d / %d\n", out.EmployeeCount, out.EmployeeLimit)
 	fmt.Printf("Machinery:   %d\n", out.MachineryCount)
+	if strings.TrimSpace(out.StockSymbol) != "" {
+		fmt.Printf("Stock:       %s\n", out.StockSymbol)
+	}
 	fmt.Printf("Upgrades:    mkt=%d rd=%d auto=%d comp=%d\n", out.MarketingLevel, out.RDLevel, out.AutomationLevel, out.ComplianceLevel)
 	fmt.Printf("Brand:       %.2f%%\n", float64(out.BrandBps)/100)
 	fmt.Printf("Op Health:   %.2f%%\n", float64(out.OperationalHealthBps)/100)

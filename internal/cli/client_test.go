@@ -9,7 +9,7 @@ func TestNormalizeBaseURL(t *testing.T) {
 		want string
 	}{
 		{name: "keeps explicit scheme", in: "https://example.com/", want: "https://example.com"},
-		{name: "defaults remote host to https", in: "api-production-d3e2.up.railway.app", want: "https://api-production-d3e2.up.railway.app"},
+		{name: "defaults remote host to https", in: "stanks-api.fxtun.dev", want: "https://stanks-api.fxtun.dev"},
 		{name: "defaults localhost to http", in: "localhost:8080/", want: "http://localhost:8080"},
 	}
 

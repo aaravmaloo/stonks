@@ -185,8 +185,10 @@ type businessCycle struct {
 	visibility       string
 	isListed         bool
 	stockSymbol      string
+	employeeLimit    int64
 	strategy         string
 	baseRevenue      int64
+	lastEvent        string
 	marketingLevel   int32
 	rdLevel          int32
 	automationLevel  int32
@@ -205,8 +207,10 @@ type businessCycle struct {
 	financeCount     int64
 	legalCount       int64
 	designCount      int64
+	machineryCount   int64
 	machineOutput    int64
 	machineUpkeep    int64
+	loanOutstanding  int64
 	loanInterest     int64
 	stockID          *int64
 	stockPrice       int64
@@ -229,8 +233,10 @@ func loadBusinessCyclesTx(ctx context.Context, tx pgx.Tx, seasonID int64, ownerU
 		       b.visibility,
 		       b.is_listed,
 		       COALESCE(b.stock_symbol, ''),
+		       b.seat_capacity,
 		       b.strategy,
 		       b.base_revenue_micros,
+		       COALESCE(b.last_event, ''),
 		       b.marketing_level,
 		       b.rd_level,
 		       b.automation_level,
@@ -249,8 +255,10 @@ func loadBusinessCyclesTx(ctx context.Context, tx pgx.Tx, seasonID int64, ownerU
 		       COALESCE(be.finance_count, 0) AS finance_count,
 		       COALESCE(be.legal_count, 0) AS legal_count,
 		       COALESCE(be.design_count, 0) AS design_count,
+		       COALESCE(m.machinery_count, 0) AS machinery_count,
 		       COALESCE(m.output_bonus, 0) AS machine_output,
 		       COALESCE(m.upkeep, 0) AS machine_upkeep,
+		       COALESCE(l.loan_outstanding, 0) AS loan_outstanding,
 		       COALESCE(l.loan_interest, 0) AS loan_interest,
 		       bs.id,
 		       COALESCE(bs.current_price_micros, 0),
@@ -272,13 +280,15 @@ func loadBusinessCyclesTx(ctx context.Context, tx pgx.Tx, seasonID int64, ownerU
 			WHERE be.business_id = b.id AND be.season_id = b.season_id
 		) be ON TRUE
 		LEFT JOIN LATERAL (
-			SELECT COALESCE(SUM(bm.output_bonus_micros), 0) AS output_bonus,
+			SELECT COUNT(1) AS machinery_count,
+			       COALESCE(SUM(bm.output_bonus_micros), 0) AS output_bonus,
 			       COALESCE(SUM(bm.upkeep_micros), 0) AS upkeep
 			FROM game.business_machinery bm
 			WHERE bm.business_id = b.id AND bm.season_id = b.season_id
 		) m ON TRUE
 		LEFT JOIN LATERAL (
-			SELECT COALESCE(SUM((bl.outstanding_micros * bl.interest_bps) / 10000), 0) AS loan_interest
+			SELECT COALESCE(SUM(bl.outstanding_micros), 0) AS loan_outstanding,
+			       COALESCE(SUM((bl.outstanding_micros * bl.interest_bps) / 10000), 0) AS loan_interest
 			FROM game.business_loans bl
 			WHERE bl.business_id = b.id AND bl.season_id = b.season_id AND bl.status = 'open'
 		) l ON TRUE
@@ -316,12 +326,12 @@ func loadBusinessCyclesTx(ctx context.Context, tx pgx.Tx, seasonID int64, ownerU
 		var c businessCycle
 		var stockID sql.NullInt64
 		if err := rows.Scan(
-			&c.businessID, &c.userID, &c.name, &c.visibility, &c.isListed, &c.stockSymbol, &c.strategy,
-			&c.baseRevenue, &c.marketingLevel, &c.rdLevel, &c.automationLevel, &c.complianceLevel,
+			&c.businessID, &c.userID, &c.name, &c.visibility, &c.isListed, &c.stockSymbol, &c.employeeLimit, &c.strategy,
+			&c.baseRevenue, &c.lastEvent, &c.marketingLevel, &c.rdLevel, &c.automationLevel, &c.complianceLevel,
 			&c.brandBps, &c.healthBps, &c.reserveMicros,
 			&c.employeeRevenue, &c.employeeCount, &c.avgRiskBps,
 			&c.opsCount, &c.engineerCount, &c.productCount, &c.salesCount, &c.growthCount, &c.financeCount, &c.legalCount, &c.designCount,
-			&c.machineOutput, &c.machineUpkeep, &c.loanInterest,
+			&c.machineryCount, &c.machineOutput, &c.machineUpkeep, &c.loanOutstanding, &c.loanInterest,
 			&stockID, &c.stockPrice, &c.stockAnchorPrice,
 		); err != nil {
 			return nil, err
@@ -475,52 +485,44 @@ func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) 
 		return out, err
 	}
 
-	bRows, err := s.db.Query(ctx, `
-		SELECT b.id, b.name, b.visibility, b.is_listed,
-		       COUNT(be.id) AS employee_count,
-		       COALESCE(b.base_revenue_micros + SUM(be.revenue_per_tick_micros), b.base_revenue_micros) AS revenue,
-		       COALESCE(m.machinery_count, 0) AS machinery_count,
-		       COALESCE(m.output_total, 0) AS machinery_output,
-		       COALESCE(m.upkeep_total, 0) AS machinery_upkeep,
-		       COALESCE(l.loan_outstanding, 0) AS loan_outstanding,
-		       b.strategy, b.marketing_level, b.rd_level, b.automation_level, b.compliance_level,
-		       b.brand_bps, b.operational_health_bps, b.cash_reserve_micros, b.last_event
-		FROM game.businesses b
-		LEFT JOIN game.business_employees be ON be.business_id = b.id
-		LEFT JOIN LATERAL (
-			SELECT COUNT(1) AS machinery_count,
-			       COALESCE(SUM(output_bonus_micros), 0) AS output_total,
-			       COALESCE(SUM(upkeep_micros), 0) AS upkeep_total
-			FROM game.business_machinery bm
-			WHERE bm.business_id = b.id AND bm.season_id = b.season_id
-		) m ON TRUE
-		LEFT JOIN LATERAL (
-			SELECT COALESCE(SUM(outstanding_micros), 0) AS loan_outstanding
-			FROM game.business_loans bl
-			WHERE bl.business_id = b.id AND bl.season_id = b.season_id AND bl.status = 'open'
-		) l ON TRUE
-		WHERE b.owner_user_id = $1 AND b.season_id = $2
-		GROUP BY b.id, m.machinery_count, m.output_total, m.upkeep_total, l.loan_outstanding
-		ORDER BY b.id
-	`, userID, seasonID)
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return out, err
 	}
-	defer bRows.Close()
-	for bRows.Next() {
-		var v BusinessView
-		if err := bRows.Scan(
-			&v.ID, &v.Name, &v.Visibility, &v.IsListed, &v.EmployeeCount, &v.RevenuePerTickMicros,
-			&v.MachineryCount, &v.MachineryOutputMicros, &v.MachineryUpkeepMicros, &v.LoanOutstandingMicros,
-			&v.Strategy, &v.MarketingLevel, &v.RDLevel, &v.AutomationLevel, &v.ComplianceLevel,
-			&v.BrandBps, &v.OperationalHealthBps, &v.CashReserveMicros, &v.LastEvent,
-		); err != nil {
-			return out, err
-		}
-		v.RevenuePerTickMicros = v.RevenuePerTickMicros + v.MachineryOutputMicros - v.MachineryUpkeepMicros
-		out.Businesses = append(out.Businesses, v)
+	defer tx.Rollback(ctx)
+	cycles, err := loadBusinessCyclesTx(ctx, tx, seasonID, userID, nil)
+	if err != nil {
+		return out, err
 	}
-	if err := bRows.Err(); err != nil {
+	for _, c := range cycles {
+		p := projectBusinessCycle(c)
+		out.Businesses = append(out.Businesses, BusinessView{
+			ID:                    c.businessID,
+			Name:                  c.name,
+			Visibility:            c.visibility,
+			IsListed:              c.isListed,
+			StockSymbol:           c.stockSymbol,
+			EmployeeLimit:         c.employeeLimit,
+			EmployeeCount:         c.employeeCount,
+			RevenuePerTickMicros:  p.RevenuePerTickMicros,
+			GrossRevenueMicros:    p.GrossRevenueMicros,
+			OperatingCostsMicros:  p.OperatingCostsMicros,
+			MachineryCount:        c.machineryCount,
+			MachineryOutputMicros: p.MachineOutputMicros,
+			MachineryUpkeepMicros: p.MachineUpkeepMicros,
+			LoanOutstandingMicros: c.loanOutstanding,
+			Strategy:              c.strategy,
+			MarketingLevel:        c.marketingLevel,
+			RDLevel:               c.rdLevel,
+			AutomationLevel:       c.automationLevel,
+			ComplianceLevel:       c.complianceLevel,
+			BrandBps:              c.brandBps,
+			OperationalHealthBps:  c.healthBps,
+			CashReserveMicros:     c.reserveMicros,
+			LastEvent:             c.lastEvent,
+		})
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return out, err
 	}
 
@@ -777,40 +779,46 @@ func (s *Service) CreateBusiness(ctx context.Context, in CreateBusinessInput) (i
 
 func (s *Service) BusinessState(ctx context.Context, userID string, seasonID, businessID int64) (BusinessView, error) {
 	var out BusinessView
-	err := s.db.QueryRow(ctx, `
-		SELECT b.id, b.name, b.visibility, b.is_listed,
-		       COUNT(be.id),
-		       COALESCE(b.base_revenue_micros + SUM(be.revenue_per_tick_micros), b.base_revenue_micros),
-		       COALESCE(m.machinery_count, 0),
-		       COALESCE(m.output_total, 0),
-		       COALESCE(m.upkeep_total, 0),
-		       COALESCE(l.loan_outstanding, 0),
-		       b.strategy, b.marketing_level, b.rd_level, b.automation_level, b.compliance_level,
-		       b.brand_bps, b.operational_health_bps, b.cash_reserve_micros, b.last_event
-		FROM game.businesses b
-		LEFT JOIN game.business_employees be ON be.business_id = b.id
-		LEFT JOIN LATERAL (
-			SELECT COUNT(1) AS machinery_count,
-			       COALESCE(SUM(output_bonus_micros), 0) AS output_total,
-			       COALESCE(SUM(upkeep_micros), 0) AS upkeep_total
-			FROM game.business_machinery bm
-			WHERE bm.business_id = b.id AND bm.season_id = b.season_id
-		) m ON TRUE
-		LEFT JOIN LATERAL (
-			SELECT COALESCE(SUM(outstanding_micros), 0) AS loan_outstanding
-			FROM game.business_loans bl
-			WHERE bl.business_id = b.id AND bl.season_id = b.season_id AND bl.status = 'open'
-		) l ON TRUE
-		WHERE b.id = $1 AND b.season_id = $2 AND b.owner_user_id = $3
-		GROUP BY b.id, m.machinery_count, m.output_total, m.upkeep_total, l.loan_outstanding
-	`, businessID, seasonID, userID).Scan(
-		&out.ID, &out.Name, &out.Visibility, &out.IsListed, &out.EmployeeCount, &out.RevenuePerTickMicros,
-		&out.MachineryCount, &out.MachineryOutputMicros, &out.MachineryUpkeepMicros, &out.LoanOutstandingMicros,
-		&out.Strategy, &out.MarketingLevel, &out.RDLevel, &out.AutomationLevel, &out.ComplianceLevel,
-		&out.BrandBps, &out.OperationalHealthBps, &out.CashReserveMicros, &out.LastEvent,
-	)
-	out.RevenuePerTickMicros = out.RevenuePerTickMicros + out.MachineryOutputMicros - out.MachineryUpkeepMicros
-	return out, err
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return out, err
+	}
+	defer tx.Rollback(ctx)
+	cycles, err := loadBusinessCyclesTx(ctx, tx, seasonID, userID, &businessID)
+	if err != nil {
+		return out, err
+	}
+	if len(cycles) == 0 {
+		return out, ErrUnauthorized
+	}
+	c := cycles[0]
+	p := projectBusinessCycle(c)
+	out = BusinessView{
+		ID:                    c.businessID,
+		Name:                  c.name,
+		Visibility:            c.visibility,
+		IsListed:              c.isListed,
+		StockSymbol:           c.stockSymbol,
+		EmployeeLimit:         c.employeeLimit,
+		EmployeeCount:         c.employeeCount,
+		RevenuePerTickMicros:  p.RevenuePerTickMicros,
+		GrossRevenueMicros:    p.GrossRevenueMicros,
+		OperatingCostsMicros:  p.OperatingCostsMicros,
+		MachineryCount:        c.machineryCount,
+		MachineryOutputMicros: p.MachineOutputMicros,
+		MachineryUpkeepMicros: p.MachineUpkeepMicros,
+		LoanOutstandingMicros: c.loanOutstanding,
+		Strategy:              c.strategy,
+		MarketingLevel:        c.marketingLevel,
+		RDLevel:               c.rdLevel,
+		AutomationLevel:       c.automationLevel,
+		ComplianceLevel:       c.complianceLevel,
+		BrandBps:              c.brandBps,
+		OperationalHealthBps:  c.healthBps,
+		CashReserveMicros:     c.reserveMicros,
+		LastEvent:             c.lastEvent,
+	}
+	return out, tx.Commit(ctx)
 }
 
 func (s *Service) SetBusinessVisibility(ctx context.Context, userID string, seasonID, businessID int64, visibility string) error {

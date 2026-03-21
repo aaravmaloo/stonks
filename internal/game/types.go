@@ -27,6 +27,7 @@ type BusinessView struct {
 	Visibility            string `json:"visibility"`
 	IsListed              bool   `json:"is_listed"`
 	StockSymbol           string `json:"stock_symbol,omitempty"`
+	EmployeeLimit         int64  `json:"employee_limit"`
 	EmployeeCount         int64  `json:"employee_count"`
 	RevenuePerTickMicros  int64  `json:"revenue_per_tick_micros"`
 	GrossRevenueMicros    int64  `json:"gross_revenue_micros"`

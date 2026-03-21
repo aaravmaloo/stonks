@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -358,6 +360,21 @@ func placeOrderCommand(cmd *cobra.Command, apiBase *string, side, symbol string,
 	client := newClient(apiBase)
 	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 	defer cancel()
+	if side == "buy" {
+		raw, err := client.StockDetail(ctx, sess.AccessToken, symbol)
+		if err != nil {
+			return err
+		}
+		detail, err := decodeInto[game.StockDetail](raw)
+		if err != nil {
+			return err
+		}
+		notional := orderNotional(detail.CurrentPriceMicros, units)
+		fee := int64(math.Round(float64(notional) * 0.0015))
+		if err := confirmWalletSpend(ctx, client, sess.AccessToken, notional+fee); err != nil {
+			return err
+		}
+	}
 	out, err := client.PlaceOrder(ctx, sess.AccessToken, symbol, side, idem, units)
 	if err != nil {
 		return queueOnNetworkError(err, syncq.Command{
@@ -487,7 +504,7 @@ func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 
 	action, err := promptChoice("Business action", []string{
 		"create", "state", "visibility", "ipo",
-		"employees_candidates", "employees_list", "employees_hire", "employees_hire_many", "employees_train",
+		"employees_list", "employees_hire", "employees_hire_many", "employees_train",
 		"machinery_list", "machinery_buy",
 		"loans_list", "loans_take", "loans_repay",
 		"strategy", "upgrade", "reserve_deposit", "reserve_withdraw",
@@ -558,12 +575,6 @@ func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 			return err
 		}
 		return renderSimpleOK(out, fmt.Sprintf("Business %d IPO opened as %s at %s stonky.", id, symbol, formatMicros(priceMicros)))
-	case "employees_candidates":
-		out, err := client.ListEmployeeCandidates(ctx, sess.AccessToken)
-		if err != nil {
-			return err
-		}
-		return renderEmployeeCandidates(out)
 	case "employees_list":
 		id, err := promptInt64("Business ID", 1)
 		if err != nil {
@@ -579,16 +590,11 @@ func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 		if err != nil {
 			return err
 		}
-		candidateID, err := promptInt64("Candidate ID", 1)
+		strategy, err := promptChoice("Hiring strategy", []string{"best_value", "high_output", "low_risk"}, "best_value")
 		if err != nil {
 			return err
 		}
-		idem := uuid.NewString()
-		out, err := client.HireEmployee(ctx, sess.AccessToken, id, candidateID, idem)
-		if err != nil {
-			return err
-		}
-		return renderSimpleOK(out, fmt.Sprintf("Hired candidate %d for business %d.", candidateID, id))
+		return hireEmployeesWithConfirmation(ctx, client, sess.AccessToken, id, 1, strategy)
 	case "employees_hire_many":
 		id, err := promptInt64("Business ID", 1)
 		if err != nil {
@@ -602,12 +608,7 @@ func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 		if err != nil {
 			return err
 		}
-		idem := uuid.NewString()
-		out, err := client.HireEmployeesBulk(ctx, sess.AccessToken, id, int(count), strategy, idem)
-		if err != nil {
-			return err
-		}
-		return renderSimpleOK(out, fmt.Sprintf("Bulk-hired up to %d candidates for business %d using %s.", count, id, strategy))
+		return hireEmployeesWithConfirmation(ctx, client, sess.AccessToken, id, count, strategy)
 	case "employees_train":
 		id, err := promptInt64("Business ID", 1)
 		if err != nil {
@@ -615,6 +616,13 @@ func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 		}
 		employeeID, err := promptInt64("Employee ID", 1)
 		if err != nil {
+			return err
+		}
+		costMicros, err := estimateTrainingCost(ctx, client, sess.AccessToken, id, employeeID)
+		if err != nil {
+			return err
+		}
+		if err := confirmWalletSpend(ctx, client, sess.AccessToken, costMicros); err != nil {
 			return err
 		}
 		idem := uuid.NewString()
@@ -640,6 +648,9 @@ func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 		}
 		machineType, err := promptChoice("Machine type", []string{"assembly_line", "robotics_cell", "cloud_cluster", "bio_reactor", "quantum_rig"}, "assembly_line")
 		if err != nil {
+			return err
+		}
+		if err := confirmWalletSpend(ctx, client, sess.AccessToken, machineryCostMicros(machineType)); err != nil {
 			return err
 		}
 		idem := uuid.NewString()
@@ -684,6 +695,9 @@ func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 			return err
 		}
 		amountMicros := game.StonkyToMicros(amount)
+		if err := confirmWalletSpend(ctx, client, sess.AccessToken, amountMicros); err != nil {
+			return err
+		}
 		idem := uuid.NewString()
 		out, err := client.RepayBusinessLoan(ctx, sess.AccessToken, id, amountMicros, idem)
 		if err != nil {
@@ -719,7 +733,21 @@ func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 			if err != nil {
 				return err
 			}
+			totalCost, err := estimateUpgradeCost(ctx, client, sess.AccessToken, id, upgrade, count)
+			if err != nil {
+				return err
+			}
+			if err := confirmWalletSpend(ctx, client, sess.AccessToken, totalCost); err != nil {
+				return err
+			}
 			return buySeatUpgrades(ctx, client, sess.AccessToken, id, count)
+		}
+		costMicros, err := estimateUpgradeCost(ctx, client, sess.AccessToken, id, upgrade, 1)
+		if err != nil {
+			return err
+		}
+		if err := confirmWalletSpend(ctx, client, sess.AccessToken, costMicros); err != nil {
+			return err
 		}
 		idem := uuid.NewString()
 		out, err := client.BuyBusinessUpgrade(ctx, sess.AccessToken, id, upgrade, idem)
@@ -737,6 +765,9 @@ func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 			return err
 		}
 		amountMicros := game.StonkyToMicros(amount)
+		if err := confirmWalletSpend(ctx, client, sess.AccessToken, amountMicros); err != nil {
+			return err
+		}
 		idem := uuid.NewString()
 		out, err := client.BusinessReserveDeposit(ctx, sess.AccessToken, id, amountMicros, idem)
 		if err != nil {
@@ -803,6 +834,15 @@ func runFundsGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 		units, err := game.SharesToUnits(qty)
 		if err != nil {
 			return err
+		}
+		if action == "buy" {
+			costMicros, err := estimateFundBuyCost(ctx, client, sess.AccessToken, code, units)
+			if err != nil {
+				return err
+			}
+			if err := confirmWalletSpend(ctx, client, sess.AccessToken, costMicros); err != nil {
+				return err
+			}
 		}
 		idem := uuid.NewString()
 		var out map[string]any
@@ -1016,26 +1056,8 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 		},
 	})
 	employees.AddCommand(&cobra.Command{
-		Use:   "candidates",
-		Short: "List candidates available for hire",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			sess, err := cl.LoadSession()
-			if err != nil {
-				return fmt.Errorf("login required: %w", err)
-			}
-			client := newClient(apiBase)
-			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
-			defer cancel()
-			out, err := client.ListEmployeeCandidates(ctx, sess.AccessToken)
-			if err != nil {
-				return err
-			}
-			return renderEmployeeCandidates(out)
-		},
-	})
-	employees.AddCommand(&cobra.Command{
-		Use:   "hire [business_id] [candidate_id]",
-		Short: "Hire a candidate for your business",
+		Use:   "hire [business_id] [best_value|high_output|low_risk]",
+		Short: "Hire one employee using a strategy",
 		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sess, err := cl.LoadSession()
@@ -1046,26 +1068,19 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			candidateID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 1, "Candidate ID")
-			if err != nil {
-				return err
-			}
-			idem := uuid.NewString()
-			body := map[string]any{"candidate_id": candidateID}
-			path := fmt.Sprintf("/v1/businesses/%d/employees/hire", businessID)
 			client := newClient(apiBase)
-			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
-			defer cancel()
-			out, err := client.HireEmployee(ctx, sess.AccessToken, businessID, candidateID, idem)
-			if err != nil {
-				return queueOnNetworkError(err, syncq.Command{
-					Method:         "POST",
-					Path:           path,
-					Body:           body,
-					IdempotencyKey: idem,
-				})
+			strategy := "best_value"
+			if len(args) >= 2 {
+				strategy = strings.ToLower(strings.TrimSpace(args[1]))
+			} else {
+				strategy, err = promptChoice("Hiring strategy", []string{"best_value", "high_output", "low_risk"}, "best_value")
+				if err != nil {
+					return err
+				}
 			}
-			return renderSimpleOK(out, fmt.Sprintf("Hired candidate %d for business %d.", candidateID, businessID))
+			ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
+			defer cancel()
+			return hireEmployeesWithConfirmation(ctx, client, sess.AccessToken, businessID, 1, strategy)
 		},
 	})
 	employees.AddCommand(&cobra.Command{
@@ -1094,22 +1109,10 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 					return err
 				}
 			}
-			idem := uuid.NewString()
-			path := fmt.Sprintf("/v1/businesses/%d/employees/hire-batch", businessID)
-			body := map[string]any{"count": count64, "strategy": strategy}
 			client := newClient(apiBase)
 			ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
 			defer cancel()
-			out, err := client.HireEmployeesBulk(ctx, sess.AccessToken, businessID, int(count64), strategy, idem)
-			if err != nil {
-				return queueOnNetworkError(err, syncq.Command{
-					Method:         "POST",
-					Path:           path,
-					Body:           body,
-					IdempotencyKey: idem,
-				})
-			}
-			return renderSimpleOK(out, fmt.Sprintf("Bulk-hired candidates for business %d using %s.", businessID, strategy))
+			return hireEmployeesWithConfirmation(ctx, client, sess.AccessToken, businessID, count64, strategy)
 		},
 	})
 	employees.AddCommand(&cobra.Command{
@@ -1134,6 +1137,13 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 			client := newClient(apiBase)
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
+			costMicros, err := estimateTrainingCost(ctx, client, sess.AccessToken, businessID, employeeID)
+			if err != nil {
+				return err
+			}
+			if err := confirmWalletSpend(ctx, client, sess.AccessToken, costMicros); err != nil {
+				return err
+			}
 			out, err := client.TrainProfessional(ctx, sess.AccessToken, businessID, employeeID, idem)
 			if err != nil {
 				return queueOnNetworkError(err, syncq.Command{
@@ -1205,6 +1215,9 @@ func newBusinessMachineryCmd(apiBase *string) *cobra.Command {
 			client := newClient(apiBase)
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
+			if err := confirmWalletSpend(ctx, client, sess.AccessToken, machineryCostMicros(machineType)); err != nil {
+				return err
+			}
 			out, err := client.BuyBusinessMachinery(ctx, sess.AccessToken, businessID, machineType, idem)
 			if err != nil {
 				return queueOnNetworkError(err, syncq.Command{
@@ -1324,6 +1337,9 @@ func newBusinessLoansCmd(apiBase *string) *cobra.Command {
 			client := newClient(apiBase)
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
+			if err := confirmWalletSpend(ctx, client, sess.AccessToken, amountMicros); err != nil {
+				return err
+			}
 			out, err := client.RepayBusinessLoan(ctx, sess.AccessToken, businessID, amountMicros, idem)
 			if err != nil {
 				return queueOnNetworkError(err, syncq.Command{
@@ -1443,13 +1459,20 @@ func newBusinessUpgradesCmd(apiBase *string) *cobra.Command {
 				}
 			}
 			if upgrade == "seats" {
+				client := newClient(apiBase)
+				ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
+				defer cancel()
 				count, err := promptInt64("How many seat upgrades", 1)
 				if err != nil {
 					return err
 				}
-				client := newClient(apiBase)
-				ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
-				defer cancel()
+				totalCost, err := estimateUpgradeCost(ctx, client, sess.AccessToken, businessID, upgrade, count)
+				if err != nil {
+					return err
+				}
+				if err := confirmWalletSpend(ctx, client, sess.AccessToken, totalCost); err != nil {
+					return err
+				}
 				return buySeatUpgrades(ctx, client, sess.AccessToken, businessID, count)
 			}
 			idem := uuid.NewString()
@@ -1458,6 +1481,13 @@ func newBusinessUpgradesCmd(apiBase *string) *cobra.Command {
 			client := newClient(apiBase)
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
+			costMicros, err := estimateUpgradeCost(ctx, client, sess.AccessToken, businessID, upgrade, 1)
+			if err != nil {
+				return err
+			}
+			if err := confirmWalletSpend(ctx, client, sess.AccessToken, costMicros); err != nil {
+				return err
+			}
 			out, err := client.BuyBusinessUpgrade(ctx, sess.AccessToken, businessID, upgrade, idem)
 			if err != nil {
 				return queueOnNetworkError(err, syncq.Command{
@@ -1523,6 +1553,219 @@ func int64Field(raw map[string]any, key string) int64 {
 	}
 }
 
+func currentWalletBalanceMicros(ctx context.Context, client *cl.Client, accessToken string) (int64, error) {
+	raw, err := client.Dashboard(ctx, accessToken)
+	if err != nil {
+		return 0, err
+	}
+	dash, err := decodeInto[game.Dashboard](raw)
+	if err != nil {
+		return 0, err
+	}
+	return dash.BalanceMicros, nil
+}
+
+func confirmWalletSpend(ctx context.Context, client *cl.Client, accessToken string, amountMicros int64) error {
+	if amountMicros <= 0 {
+		return nil
+	}
+	balance, err := currentWalletBalanceMicros(ctx, client, accessToken)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Balance:                 %s stonky\n", formatMicros(balance))
+	fmt.Printf("Amount to be spent:      %s stonky\n", formatMicros(amountMicros))
+	fmt.Printf("Balance after spending:  %s stonky\n", formatMicros(balance-amountMicros))
+	ok, err := promptConfirm("Continue", false)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("cancelled")
+	}
+	return nil
+}
+
+func estimateEmployeeHireCost(ctx context.Context, client *cl.Client, accessToken string, count int64, strategy string) (int64, error) {
+	raw, err := client.ListEmployeeCandidates(ctx, accessToken)
+	if err != nil {
+		return 0, err
+	}
+	payload, err := decodeInto[candidatesPayload](raw)
+	if err != nil {
+		return 0, err
+	}
+	candidates := payload.Candidates
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "", "best_value":
+		sort.Slice(candidates, func(i, j int) bool {
+			li := float64(candidates[i].RevenuePerTickMicros) / float64(maxInt64(candidates[i].HireCostMicros, 1))
+			lj := float64(candidates[j].RevenuePerTickMicros) / float64(maxInt64(candidates[j].HireCostMicros, 1))
+			if li == lj {
+				if candidates[i].RiskBps == candidates[j].RiskBps {
+					return candidates[i].ID < candidates[j].ID
+				}
+				return candidates[i].RiskBps < candidates[j].RiskBps
+			}
+			return li > lj
+		})
+	case "high_output":
+		sort.Slice(candidates, func(i, j int) bool {
+			if candidates[i].RevenuePerTickMicros == candidates[j].RevenuePerTickMicros {
+				if candidates[i].RiskBps == candidates[j].RiskBps {
+					return candidates[i].ID < candidates[j].ID
+				}
+				return candidates[i].RiskBps < candidates[j].RiskBps
+			}
+			return candidates[i].RevenuePerTickMicros > candidates[j].RevenuePerTickMicros
+		})
+	case "low_risk":
+		sort.Slice(candidates, func(i, j int) bool {
+			if candidates[i].RiskBps == candidates[j].RiskBps {
+				if candidates[i].RevenuePerTickMicros == candidates[j].RevenuePerTickMicros {
+					return candidates[i].ID < candidates[j].ID
+				}
+				return candidates[i].RevenuePerTickMicros > candidates[j].RevenuePerTickMicros
+			}
+			return candidates[i].RiskBps < candidates[j].RiskBps
+		})
+	default:
+		return 0, fmt.Errorf("invalid strategy")
+	}
+	limit := int(count)
+	if limit > len(candidates) {
+		limit = len(candidates)
+	}
+	var total int64
+	for i := 0; i < limit; i++ {
+		total += candidates[i].HireCostMicros
+	}
+	return total, nil
+}
+
+func hireEmployeesWithConfirmation(ctx context.Context, client *cl.Client, accessToken string, businessID, count int64, strategy string) error {
+	estimatedCost, err := estimateEmployeeHireCost(ctx, client, accessToken, count, strategy)
+	if err != nil {
+		return err
+	}
+	if err := confirmWalletSpend(ctx, client, accessToken, estimatedCost); err != nil {
+		return err
+	}
+	idem := uuid.NewString()
+	path := fmt.Sprintf("/v1/businesses/%d/employees/hire-batch", businessID)
+	body := map[string]any{"count": count, "strategy": strategy}
+	out, err := client.HireEmployeesBulk(ctx, accessToken, businessID, int(count), strategy, idem)
+	if err != nil {
+		return queueOnNetworkError(err, syncq.Command{
+			Method:         "POST",
+			Path:           path,
+			Body:           body,
+			IdempotencyKey: idem,
+		})
+	}
+	return renderSimpleOK(out, fmt.Sprintf("Hired %d employee(s) for business %d using %s.", int64Field(out, "hired_count"), businessID, strategy))
+}
+
+func estimateTrainingCost(ctx context.Context, client *cl.Client, accessToken string, businessID, employeeID int64) (int64, error) {
+	raw, err := client.ListBusinessEmployees(ctx, accessToken, businessID)
+	if err != nil {
+		return 0, err
+	}
+	payload, err := decodeInto[businessEmployeesPayload](raw)
+	if err != nil {
+		return 0, err
+	}
+	for _, e := range payload.Employees {
+		if e.ID == employeeID {
+			return int64(math.Round(float64(e.RevenuePerTickMicros) * 1.8)), nil
+		}
+	}
+	return 0, fmt.Errorf("employee not found")
+}
+
+func machineryCostMicros(machineType string) int64 {
+	switch machineType {
+	case "assembly_line":
+		return 6_500 * game.MicrosPerStonky
+	case "robotics_cell":
+		return 12_500 * game.MicrosPerStonky
+	case "cloud_cluster":
+		return 18_000 * game.MicrosPerStonky
+	case "bio_reactor":
+		return 25_000 * game.MicrosPerStonky
+	case "quantum_rig":
+		return 40_000 * game.MicrosPerStonky
+	default:
+		return 0
+	}
+}
+
+func estimateUpgradeCost(ctx context.Context, client *cl.Client, accessToken string, businessID int64, upgrade string, count int64) (int64, error) {
+	raw, err := client.BusinessState(ctx, accessToken, businessID)
+	if err != nil {
+		return 0, err
+	}
+	state, err := decodeInto[game.BusinessView](raw)
+	if err != nil {
+		return 0, err
+	}
+	switch upgrade {
+	case "marketing":
+		return upgradeCostFromLevel(int(state.MarketingLevel)), nil
+	case "rd":
+		return upgradeCostFromLevel(int(state.RDLevel)), nil
+	case "automation":
+		return upgradeCostFromLevel(int(state.AutomationLevel)), nil
+	case "compliance":
+		return upgradeCostFromLevel(int(state.ComplianceLevel)), nil
+	case "seats":
+		level := int((state.EmployeeLimit - game.BaseBusinessEmployeeLimit) / game.SeatUpgradeIncrement)
+		var total int64
+		for i := int64(0); i < count; i++ {
+			total += seatUpgradeCostFromLevel(level + int(i))
+		}
+		return total, nil
+	default:
+		return 0, fmt.Errorf("invalid upgrade")
+	}
+}
+
+func upgradeCostFromLevel(level int) int64 {
+	return int64(math.Round(float64((900+level*350)*int(game.MicrosPerStonky)) * (1 + float64(level)*0.12)))
+}
+
+func seatUpgradeCostFromLevel(level int) int64 {
+	return int64(math.Round(float64((1_800+level*700)*int(game.MicrosPerStonky)) * (1 + float64(level)*0.18)))
+}
+
+func estimateFundBuyCost(ctx context.Context, client *cl.Client, accessToken, code string, units int64) (int64, error) {
+	raw, err := client.ListFunds(ctx, accessToken)
+	if err != nil {
+		return 0, err
+	}
+	payload, err := decodeInto[fundsPayload](raw)
+	if err != nil {
+		return 0, err
+	}
+	code = strings.ToUpper(strings.TrimSpace(code))
+	for _, f := range payload.Funds {
+		if f.Code != code {
+			continue
+		}
+		notional := orderNotional(f.NavMicros, units)
+		fee := int64(math.Round(float64(notional) * 0.0010))
+		return notional + fee, nil
+	}
+	return 0, fmt.Errorf("fund not found")
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func newBusinessReserveCmd(apiBase *string) *cobra.Command {
 	reserve := &cobra.Command{
 		Use:   "reserve",
@@ -1577,6 +1820,9 @@ func runReserveTransfer(cmd *cobra.Command, apiBase *string, args []string, dire
 	defer cancel()
 	var out map[string]any
 	if direction == "deposit" {
+		if err := confirmWalletSpend(ctx, client, sess.AccessToken, amountMicros); err != nil {
+			return err
+		}
 		out, err = client.BusinessReserveDeposit(ctx, sess.AccessToken, businessID, amountMicros, idem)
 	} else {
 		out, err = client.BusinessReserveWithdraw(ctx, sess.AccessToken, businessID, amountMicros, idem)
@@ -1638,6 +1884,13 @@ func newFundsCmd(apiBase *string) *cobra.Command {
 			client := newClient(apiBase)
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
+			costMicros, err := estimateFundBuyCost(ctx, client, sess.AccessToken, code, units)
+			if err != nil {
+				return err
+			}
+			if err := confirmWalletSpend(ctx, client, sess.AccessToken, costMicros); err != nil {
+				return err
+			}
 			out, err := client.BuyFund(ctx, sess.AccessToken, code, idem, units)
 			if err != nil {
 				return queueOnNetworkError(err, syncq.Command{

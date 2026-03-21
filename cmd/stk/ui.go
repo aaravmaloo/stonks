@@ -202,6 +202,31 @@ func promptInt64(label string, min int64) (int64, error) {
 	}
 }
 
+func promptConfirm(label string, defaultYes bool) (bool, error) {
+	def := "n"
+	if defaultYes {
+		def = "y"
+	}
+	for {
+		fmt.Printf("%s (y/n) [%s]: ", label, def)
+		text, err := stdinReader.ReadString('\n')
+		if err != nil {
+			return false, err
+		}
+		text = strings.ToLower(strings.TrimSpace(text))
+		if text == "" {
+			text = def
+		}
+		switch text {
+		case "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		}
+		printWarn("Enter y or n.")
+	}
+}
+
 func promptSymbol(label string) (string, error) {
 	for {
 		symbol, err := promptRequired(label)

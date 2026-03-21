@@ -544,6 +544,19 @@ func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) 
 	return out, nil
 }
 
+func (s *Service) WalletSummary(ctx context.Context, userID string, seasonID int64) (WalletSummary, error) {
+	var out WalletSummary
+	out.SeasonID = seasonID
+	if err := s.db.QueryRow(ctx, `
+		SELECT balance_micros, peak_net_worth_micros, active_business_id
+		FROM game.wallets
+		WHERE user_id = $1 AND season_id = $2
+	`, userID, seasonID).Scan(&out.BalanceMicros, &out.PeakNetWorthMicros, &out.ActiveBusinessID); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 func (s *Service) ListStocks(ctx context.Context, seasonID int64, includeUnlisted bool) ([]StockView, error) {
 	query := `
 		SELECT symbol, display_name, current_price_micros, listed_public
@@ -688,10 +701,6 @@ func (s *Service) PlaceOrder(ctx context.Context, in OrderInput) (OrderResult, e
 				SET balance_micros = $1, updated_at = now()
 				WHERE user_id = $2 AND season_id = $3
 			`, balance, in.UserID, in.SeasonID); err != nil {
-				return err
-			}
-
-			if err := s.updatePeakNetWorthTx(ctx, tx, in.UserID, in.SeasonID); err != nil {
 				return err
 			}
 

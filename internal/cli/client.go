@@ -67,6 +67,12 @@ func (c *Client) Dashboard(ctx context.Context, accessToken string) (map[string]
 	return out, err
 }
 
+func (c *Client) WalletSummary(ctx context.Context, accessToken string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodGet, "/v1/wallet", accessToken, nil, &out, "")
+	return out, err
+}
+
 func (c *Client) ListStocks(ctx context.Context, accessToken string, all bool) (map[string]any, error) {
 	path := "/v1/stocks"
 	if all {

@@ -1116,9 +1116,6 @@ func (s *Service) TradeFund(ctx context.Context, in FundOrderInput) (map[string]
 	if err := appendLedgerEntries(ctx, tx, in.UserID, in.SeasonID, "fund_"+in.Side, notional, fee); err != nil {
 		return out, err
 	}
-	if err := s.updatePeakNetWorthTx(ctx, tx, in.UserID, in.SeasonID); err != nil {
-		return out, err
-	}
 	if err := tx.Commit(ctx); err != nil {
 		return out, err
 	}

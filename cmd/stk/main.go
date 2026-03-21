@@ -357,7 +357,7 @@ func placeOrderCommand(cmd *cobra.Command, apiBase *string, side, symbol string,
 	}
 
 	client := newClient(apiBase)
-	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
 	defer cancel()
 	if side == "buy" {
 		raw, err := client.StockDetail(ctx, sess.AccessToken, symbol)
@@ -1553,11 +1553,11 @@ func int64Field(raw map[string]any, key string) int64 {
 }
 
 func currentWalletBalanceMicros(ctx context.Context, client *cl.Client, accessToken string) (int64, error) {
-	raw, err := client.Dashboard(ctx, accessToken)
+	raw, err := client.WalletSummary(ctx, accessToken)
 	if err != nil {
 		return 0, err
 	}
-	dash, err := decodeInto[game.Dashboard](raw)
+	dash, err := decodeInto[game.WalletSummary](raw)
 	if err != nil {
 		return 0, err
 	}

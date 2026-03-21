@@ -63,7 +63,7 @@ func (s *Server) routes() {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
+	r.Use(middleware.Timeout(2 * time.Minute))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -76,6 +76,7 @@ func (s *Server) routes() {
 		r.Group(func(r chi.Router) {
 			r.Use(s.authMiddleware)
 			r.Get("/dashboard", s.handleDashboard)
+			r.Get("/wallet", s.handleWallet)
 			r.Get("/stocks", s.handleStocksList)
 			r.Get("/stocks/{symbol}", s.handleStockDetail)
 			r.Post("/orders", s.handleOrder)
@@ -204,6 +205,25 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := s.game.Dashboard(r.Context(), user.UserID, seasonID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleWallet(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out, err := s.game.WalletSummary(r.Context(), user.UserID, seasonID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

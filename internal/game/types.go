@@ -12,6 +12,13 @@ type Dashboard struct {
 	Businesses         []BusinessView `json:"businesses"`
 }
 
+type WalletSummary struct {
+	SeasonID           int64  `json:"season_id"`
+	ActiveBusinessID   *int64 `json:"active_business_id,omitempty"`
+	BalanceMicros      int64  `json:"balance_micros"`
+	PeakNetWorthMicros int64  `json:"peak_net_worth_micros"`
+}
+
 type PositionView struct {
 	Symbol             string `json:"symbol"`
 	DisplayName        string `json:"display_name"`

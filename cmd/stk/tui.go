@@ -1025,7 +1025,7 @@ func (m mainModel) submitForm() tea.Cmd {
 			if m.subState == "buy_upgrade" {
 				upgrade := strings.ToLower(strings.TrimSpace(m.inputs[0].Value()))
 				switch upgrade {
-				case "marketing", "rd", "automation", "compliance":
+				case "marketing", "rd", "automation", "compliance", "seats":
 				default:
 					return errorMsg(fmt.Errorf("invalid upgrade"))
 				}
@@ -1178,7 +1178,7 @@ func (m mainModel) dashboardView() string {
 		s += infoStyle.Render("No businesses yet.") + "\n"
 	} else {
 		for _, b := range d.Businesses {
-			s += fmt.Sprintf("  #%-4d %-20s Rev: %-12s Reserve: %s\n", b.ID, truncate(b.Name, 20), formatMicros(b.RevenuePerTickMicros), formatMicros(b.CashReserveMicros))
+			s += fmt.Sprintf("  #%-4d %-20s Rev: %-12s Emp: %d/%d Reserve: %s\n", b.ID, truncate(b.Name, 20), formatMicros(b.RevenuePerTickMicros), b.EmployeeCount, b.EmployeeLimit, formatMicros(b.CashReserveMicros))
 		}
 	}
 	return s
@@ -1240,7 +1240,10 @@ func (m mainModel) businessView() string {
 	s += fmt.Sprintf("  Revenue:    %s / tick\n", formatMicros(b.RevenuePerTickMicros))
 	s += fmt.Sprintf("  Reserve:    %s stonky\n", formatMicros(b.CashReserveMicros))
 	s += fmt.Sprintf("  Debt:       %s stonky\n", formatMicros(b.LoanOutstandingMicros))
-	s += fmt.Sprintf("  Employees:  %d\n", b.EmployeeCount)
+	s += fmt.Sprintf("  Employees:  %d / %d\n", b.EmployeeCount, b.EmployeeLimit)
+	if strings.TrimSpace(b.StockSymbol) != "" {
+		s += fmt.Sprintf("  Stock:      %s\n", b.StockSymbol)
+	}
 	s += fmt.Sprintf("  Upgrades:   mkt=%d rd=%d auto=%d comp=%d\n", b.MarketingLevel, b.RDLevel, b.AutomationLevel, b.ComplianceLevel)
 	s += "\n" + headerStyle.Render("Actions (CLI parity)") + "\n"
 	s += "  o select | c create | v visibility | i ipo | s strategy | u upgrade | x sell\n"

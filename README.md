@@ -226,7 +226,7 @@ Alias:
 - `stk business loans repay [business_id] [stonky]`
 - `stk business loans list [business_id]`
 - `stk business strategy [business_id] [aggressive|balanced|defensive]`
-- `stk business upgrades buy [business_id] [marketing|rd|automation|compliance]`
+- `stk business upgrades buy [business_id] [marketing|rd|automation|compliance|seats]`
 - `stk business reserve deposit [business_id] [stonky]`
 - `stk business reserve withdraw [business_id] [stonky]`
 

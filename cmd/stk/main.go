@@ -1090,7 +1090,7 @@ func newBusinessEmployeesCmd(apiBase *string) *cobra.Command {
 			path := fmt.Sprintf("/v1/businesses/%d/employees/hire-batch", businessID)
 			body := map[string]any{"count": count64, "strategy": strategy}
 			client := newClient(apiBase)
-			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
 			defer cancel()
 			out, err := client.HireEmployeesBulk(ctx, sess.AccessToken, businessID, int(count64), strategy, idem)
 			if err != nil {

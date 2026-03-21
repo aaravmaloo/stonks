@@ -21,11 +21,25 @@ type Client struct {
 
 func NewClient(baseURL string) *Client {
 	return &Client{
-		BaseURL: strings.TrimRight(baseURL, "/"),
+		BaseURL: normalizeBaseURL(baseURL),
 		HTTP: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 2 * time.Minute,
 		},
 	}
+}
+
+func normalizeBaseURL(raw string) string {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if base == "" {
+		return ""
+	}
+	if strings.Contains(base, "://") {
+		return base
+	}
+	if strings.HasPrefix(base, "localhost") || strings.HasPrefix(base, "127.0.0.1") {
+		return "http://" + base
+	}
+	return "https://" + base
 }
 
 func (c *Client) Signup(ctx context.Context, email, password, username string) (auth.Session, error) {

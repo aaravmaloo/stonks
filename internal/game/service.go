@@ -288,7 +288,7 @@ func loadBusinessCyclesTx(ctx context.Context, tx pgx.Tx, seasonID int64, ownerU
 		) m ON TRUE
 		LEFT JOIN LATERAL (
 			SELECT COALESCE(SUM(bl.outstanding_micros), 0) AS loan_outstanding,
-			       COALESCE(SUM((bl.outstanding_micros * bl.interest_bps) / 10000), 0) AS loan_interest
+			       COALESCE(SUM(((bl.outstanding_micros::numeric * bl.interest_bps::numeric) / 10000)::bigint), 0) AS loan_interest
 			FROM game.business_loans bl
 			WHERE bl.business_id = b.id AND bl.season_id = b.season_id AND bl.status = 'open'
 		) l ON TRUE
@@ -1783,7 +1783,7 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 			WHERE bm.business_id = b.id AND bm.season_id = b.season_id
 		) m ON TRUE
 		LEFT JOIN LATERAL (
-			SELECT COALESCE(SUM((bl.outstanding_micros * bl.interest_bps) / 10000), 0) AS loan_interest
+			SELECT COALESCE(SUM(((bl.outstanding_micros::numeric * bl.interest_bps::numeric) / 10000)::bigint), 0) AS loan_interest
 			FROM game.business_loans bl
 			WHERE bl.business_id = b.id AND bl.season_id = b.season_id AND bl.status = 'open'
 		) l ON TRUE
@@ -2064,7 +2064,10 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE game.business_loans
-		SET outstanding_micros = outstanding_micros + ((outstanding_micros * interest_bps) / 10000),
+		SET outstanding_micros = LEAST(
+		        9223372036854775807::bigint,
+		        outstanding_micros + (((outstanding_micros::numeric * interest_bps::numeric) / 10000)::bigint)
+		    ),
 		    updated_at = now()
 		WHERE season_id = $1 AND status = 'open' AND outstanding_micros > 0
 	`, seasonID); err != nil {
@@ -2259,7 +2262,7 @@ func updateSeasonPeakNetWorthTx(ctx context.Context, tx pgx.Tx, seasonID int64) 
 		SET peak_net_worth_micros = GREATEST(
 		        w.peak_net_worth_micros,
 		        w.balance_micros + COALESCE((
-		            SELECT SUM((p.quantity_units * s.current_price_micros) / $2)
+		            SELECT SUM(((p.quantity_units::numeric * s.current_price_micros::numeric) / $2::numeric)::bigint)
 		            FROM game.positions p
 		            JOIN game.stocks s ON s.id = p.stock_id
 		            WHERE p.user_id = w.user_id

@@ -949,170 +949,194 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 	}
 	outerOrderBy := strings.ReplaceAll(orderBy, "ec.", "")
 
-	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
-	if err != nil {
-		return out, err
-	}
-	defer tx.Rollback(ctx)
-
-	if err := claimIdempotency(ctx, tx, in.UserID, in.IdempotencyKey, "hire_employee_batch"); err != nil {
-		return out, err
-	}
-
-	var ownerID string
-	var employeeLimit int64
-	if err := tx.QueryRow(ctx, `
-		SELECT owner_user_id, seat_capacity
-		FROM game.businesses
-		WHERE id = $1 AND season_id = $2
-		FOR UPDATE
-	`, in.BusinessID, in.SeasonID).Scan(&ownerID, &employeeLimit); err != nil {
-		return out, err
-	}
-	if ownerID != in.UserID {
-		return out, ErrUnauthorized
-	}
-	employeeLimit = effectiveEmployeeLimit(employeeLimit)
-	currentEmployees, err := businessEmployeeCountTx(ctx, tx, in.BusinessID, in.SeasonID)
-	if err != nil {
-		return out, err
-	}
-	if currentEmployees >= employeeLimit {
-		return out, ErrEmployeeLimitReached
-	}
-	remainingSlots := int(employeeLimit - currentEmployees)
-	if remainingSlots <= 0 {
-		return out, ErrEmployeeLimitReached
-	}
-	selectionLimit := in.Count
-	if selectionLimit > remainingSlots {
-		selectionLimit = remainingSlots
-	}
-
-	var balance, peak int64
-	if err := tx.QueryRow(ctx, `
-		SELECT balance_micros, peak_net_worth_micros
-		FROM game.wallets
-		WHERE user_id = $1 AND season_id = $2
-		FOR UPDATE
-	`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
-		return out, err
-	}
-
-	rows, err := tx.Query(ctx, `
-		WITH ranked AS (
-			SELECT ec.id, ec.full_name, ec.role, ec.trait, ec.hire_cost_micros, ec.revenue_per_tick_micros, ec.risk_bps,
-			       SUM(ec.hire_cost_micros) OVER (ORDER BY `+orderBy+`) AS running_cost
-			FROM game.employee_candidates ec
-			LEFT JOIN game.business_employees be
-				ON be.business_id = $1
-			   AND be.season_id = $2
-			   AND be.source_candidate_id = ec.id
-			WHERE ec.season_id = $2
-			  AND be.id IS NULL
-			ORDER BY `+orderBy+`
-			LIMIT $3
-		)
-		SELECT id, full_name, role, trait, hire_cost_micros, revenue_per_tick_micros, risk_bps
-		FROM ranked
-		WHERE $4 - running_cost >= $5
-		ORDER BY `+outerOrderBy+`
-	`, in.BusinessID, in.SeasonID, selectionLimit, balance, -DebtLimitFromPeak(peak))
-	if err != nil {
-		return out, err
-	}
-	defer rows.Close()
-
-	type hirePick struct {
-		ID      int64
-		Name    string
-		Role    string
-		Trait   string
-		Cost    int64
-		Revenue int64
-		Risk    int32
-	}
-	shortlist := make([]hirePick, 0, in.Count)
-	for rows.Next() {
-		var pick hirePick
-		if err := rows.Scan(&pick.ID, &pick.Name, &pick.Role, &pick.Trait, &pick.Cost, &pick.Revenue, &pick.Risk); err != nil {
+	const maxAttempts = 8
+	retryDelay := 75 * time.Millisecond
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+		if err != nil {
 			return out, err
 		}
-		shortlist = append(shortlist, pick)
-	}
-	if err := rows.Err(); err != nil {
-		return out, err
-	}
-	if len(shortlist) == 0 {
-		return out, fmt.Errorf("no candidates available to hire")
-	}
+		err = func() error {
+			defer tx.Rollback(ctx)
 
-	totalCost := int64(0)
-	hiredIDs := make([]int64, 0, len(shortlist))
-	hiredNames := make([]string, 0, len(shortlist))
-	copyRows := make([][]any, 0, len(shortlist))
-	for _, pick := range shortlist {
-		totalCost += pick.Cost
-		hiredIDs = append(hiredIDs, pick.ID)
-		hiredNames = append(hiredNames, pick.Name)
-		copyRows = append(copyRows, []any{
-			in.BusinessID,
-			in.SeasonID,
-			pick.ID,
-			pick.Name,
-			pick.Role,
-			pick.Trait,
-			pick.Revenue,
-			pick.Risk,
-		})
-	}
-	if len(hiredIDs) == 0 {
-		return out, ErrInsufficientFunds
-	}
-	if _, err := tx.CopyFrom(
-		ctx,
-		pgx.Identifier{"game", "business_employees"},
-		[]string{"business_id", "season_id", "source_candidate_id", "full_name", "role", "trait", "revenue_per_tick_micros", "risk_bps"},
-		pgx.CopyFromRows(copyRows),
-	); err != nil {
-		return out, err
-	}
+			if err := claimIdempotency(ctx, tx, in.UserID, in.IdempotencyKey, "hire_employee_batch"); err != nil {
+				return err
+			}
 
-	balance -= totalCost
-	if _, err := tx.Exec(ctx, `
-		UPDATE game.wallets
-		SET balance_micros = $1, updated_at = now()
-		WHERE user_id = $2 AND season_id = $3
-	`, balance, in.UserID, in.SeasonID); err != nil {
-		return out, err
-	}
-	if err := appendLedgerEntries(ctx, tx, in.UserID, in.SeasonID, "employee_hire_batch", totalCost, 0); err != nil {
-		return out, err
-	}
-	if err := s.updatePeakNetWorthTx(ctx, tx, in.UserID, in.SeasonID); err != nil {
-		return out, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return out, err
-	}
+			var ownerID string
+			var employeeLimit int64
+			if err := tx.QueryRow(ctx, `
+				SELECT owner_user_id, seat_capacity
+				FROM game.businesses
+				WHERE id = $1 AND season_id = $2
+				FOR UPDATE
+			`, in.BusinessID, in.SeasonID).Scan(&ownerID, &employeeLimit); err != nil {
+				return err
+			}
+			if ownerID != in.UserID {
+				return ErrUnauthorized
+			}
+			employeeLimit = effectiveEmployeeLimit(employeeLimit)
+			currentEmployees, err := businessEmployeeCountTx(ctx, tx, in.BusinessID, in.SeasonID)
+			if err != nil {
+				return err
+			}
+			if currentEmployees >= employeeLimit {
+				return ErrEmployeeLimitReached
+			}
+			remainingSlots := int(employeeLimit - currentEmployees)
+			if remainingSlots <= 0 {
+				return ErrEmployeeLimitReached
+			}
+			selectionLimit := in.Count
+			if selectionLimit > remainingSlots {
+				selectionLimit = remainingSlots
+			}
 
-	out["ok"] = true
-	out["strategy"] = strategy
-	out["requested_count"] = in.Count
-	out["hired_count"] = len(hiredIDs)
-	out["total_cost_micros"] = totalCost
-	out["new_balance_micros"] = balance
-	out["employee_limit"] = employeeLimit
-	out["employee_count"] = currentEmployees + int64(len(hiredIDs))
-	out["employee_slots_remaining"] = employeeLimit - (currentEmployees + int64(len(hiredIDs)))
-	if len(hiredIDs) <= 25 {
-		out["hired_candidate_ids"] = hiredIDs
-		out["hired_names"] = hiredNames
-	} else {
-		out["hired_candidate_preview_ids"] = hiredIDs[:25]
-		out["hired_name_preview"] = hiredNames[:25]
+			var balance, peak int64
+			if err := tx.QueryRow(ctx, `
+				SELECT balance_micros, peak_net_worth_micros
+				FROM game.wallets
+				WHERE user_id = $1 AND season_id = $2
+				FOR UPDATE
+			`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+				return err
+			}
+
+			rows, err := tx.Query(ctx, `
+				WITH ranked AS (
+					SELECT ec.id, ec.full_name, ec.role, ec.trait, ec.hire_cost_micros, ec.revenue_per_tick_micros, ec.risk_bps,
+					       SUM(ec.hire_cost_micros) OVER (ORDER BY `+orderBy+`) AS running_cost
+					FROM game.employee_candidates ec
+					LEFT JOIN game.business_employees be
+						ON be.business_id = $1
+					   AND be.season_id = $2
+					   AND be.source_candidate_id = ec.id
+					WHERE ec.season_id = $2
+					  AND be.id IS NULL
+					ORDER BY `+orderBy+`
+					LIMIT $3
+				)
+				SELECT id, full_name, role, trait, hire_cost_micros, revenue_per_tick_micros, risk_bps
+				FROM ranked
+				WHERE $4 - running_cost >= $5
+				ORDER BY `+outerOrderBy+`
+			`, in.BusinessID, in.SeasonID, selectionLimit, balance, -DebtLimitFromPeak(peak))
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+
+			type hirePick struct {
+				ID      int64
+				Name    string
+				Role    string
+				Trait   string
+				Cost    int64
+				Revenue int64
+				Risk    int32
+			}
+			shortlist := make([]hirePick, 0, in.Count)
+			for rows.Next() {
+				var pick hirePick
+				if err := rows.Scan(&pick.ID, &pick.Name, &pick.Role, &pick.Trait, &pick.Cost, &pick.Revenue, &pick.Risk); err != nil {
+					return err
+				}
+				shortlist = append(shortlist, pick)
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			if len(shortlist) == 0 {
+				return fmt.Errorf("no candidates available to hire")
+			}
+
+			totalCost := int64(0)
+			hiredIDs := make([]int64, 0, len(shortlist))
+			hiredNames := make([]string, 0, len(shortlist))
+			copyRows := make([][]any, 0, len(shortlist))
+			for _, pick := range shortlist {
+				totalCost += pick.Cost
+				hiredIDs = append(hiredIDs, pick.ID)
+				hiredNames = append(hiredNames, pick.Name)
+				copyRows = append(copyRows, []any{
+					in.BusinessID,
+					in.SeasonID,
+					pick.ID,
+					pick.Name,
+					pick.Role,
+					pick.Trait,
+					pick.Revenue,
+					pick.Risk,
+				})
+			}
+			if len(hiredIDs) == 0 {
+				return ErrInsufficientFunds
+			}
+			if _, err := tx.CopyFrom(
+				ctx,
+				pgx.Identifier{"game", "business_employees"},
+				[]string{"business_id", "season_id", "source_candidate_id", "full_name", "role", "trait", "revenue_per_tick_micros", "risk_bps"},
+				pgx.CopyFromRows(copyRows),
+			); err != nil {
+				return err
+			}
+
+			balance -= totalCost
+			if _, err := tx.Exec(ctx, `
+				UPDATE game.wallets
+				SET balance_micros = $1, updated_at = now()
+				WHERE user_id = $2 AND season_id = $3
+			`, balance, in.UserID, in.SeasonID); err != nil {
+				return err
+			}
+			if err := appendLedgerEntries(ctx, tx, in.UserID, in.SeasonID, "employee_hire_batch", totalCost, 0); err != nil {
+				return err
+			}
+			if err := s.updatePeakNetWorthTx(ctx, tx, in.UserID, in.SeasonID); err != nil {
+				return err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return err
+			}
+
+			out = map[string]any{
+				"ok":                       true,
+				"strategy":                 strategy,
+				"requested_count":          in.Count,
+				"hired_count":              len(hiredIDs),
+				"total_cost_micros":        totalCost,
+				"new_balance_micros":       balance,
+				"employee_limit":           employeeLimit,
+				"employee_count":           currentEmployees + int64(len(hiredIDs)),
+				"employee_slots_remaining": employeeLimit - (currentEmployees + int64(len(hiredIDs))),
+			}
+			if len(hiredIDs) <= 25 {
+				out["hired_candidate_ids"] = hiredIDs
+				out["hired_names"] = hiredNames
+			} else {
+				out["hired_candidate_preview_ids"] = hiredIDs[:25]
+				out["hired_name_preview"] = hiredNames[:25]
+			}
+			return nil
+		}()
+		if err == nil {
+			return out, nil
+		}
+		if !isSerializationError(err) {
+			return out, err
+		}
+		if attempt == maxAttempts-1 {
+			return out, ErrTxConflict
+		}
+		if err := sleepWithContext(ctx, retryDelay); err != nil {
+			return out, err
+		}
+		if retryDelay < 1200*time.Millisecond {
+			retryDelay *= 2
+		}
 	}
-	return out, nil
+	return out, ErrTxConflict
 }
 
 func (s *Service) ListEmployeeCandidates(ctx context.Context, seasonID int64) ([]map[string]any, error) {
@@ -2738,7 +2762,7 @@ func netWorthTx(ctx context.Context, tx pgx.Tx, userID string, seasonID int64) (
 	}
 	var holdings int64
 	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(SUM((p.quantity_units * s.current_price_micros) / $3), 0)
+		SELECT COALESCE(SUM(((p.quantity_units::numeric * s.current_price_micros::numeric) / $3::numeric)::bigint), 0)
 		FROM game.positions p
 		JOIN game.stocks s ON s.id = p.stock_id
 		WHERE p.user_id = $1 AND p.season_id = $2

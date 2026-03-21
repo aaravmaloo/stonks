@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -712,6 +713,13 @@ func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 		upgrade, err := promptChoice("Upgrade", []string{"marketing", "rd", "automation", "compliance", "seats"}, "marketing")
 		if err != nil {
 			return err
+		}
+		if upgrade == "seats" {
+			count, err := promptInt64("How many seat upgrades", 1)
+			if err != nil {
+				return err
+			}
+			return buySeatUpgrades(ctx, client, sess.AccessToken, id, count)
 		}
 		idem := uuid.NewString()
 		out, err := client.BuyBusinessUpgrade(ctx, sess.AccessToken, id, upgrade, idem)
@@ -1434,6 +1442,16 @@ func newBusinessUpgradesCmd(apiBase *string) *cobra.Command {
 					return err
 				}
 			}
+			if upgrade == "seats" {
+				count, err := promptInt64("How many seat upgrades", 1)
+				if err != nil {
+					return err
+				}
+				client := newClient(apiBase)
+				ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
+				defer cancel()
+				return buySeatUpgrades(ctx, client, sess.AccessToken, businessID, count)
+			}
 			idem := uuid.NewString()
 			path := fmt.Sprintf("/v1/businesses/%d/upgrades/buy", businessID)
 			body := map[string]any{"upgrade": upgrade}
@@ -1453,6 +1471,56 @@ func newBusinessUpgradesCmd(apiBase *string) *cobra.Command {
 		},
 	})
 	return upgrades
+}
+
+func buySeatUpgrades(ctx context.Context, client *cl.Client, accessToken string, businessID, count int64) error {
+	var totalCost int64
+	var employeeLimit int64
+	for i := int64(0); i < count; i++ {
+		out, err := client.BuyBusinessUpgrade(ctx, accessToken, businessID, "seats", uuid.NewString())
+		if err != nil {
+			if i == 0 {
+				return err
+			}
+			printWarn(fmt.Sprintf("Stopped after %d seat upgrades: %v", i, err))
+			break
+		}
+		totalCost += int64Field(out, "cost_micros")
+		if limit := int64Field(out, "employee_limit"); limit > 0 {
+			employeeLimit = limit
+		}
+	}
+	if totalCost == 0 {
+		return fmt.Errorf("no seat upgrades purchased")
+	}
+	msg := fmt.Sprintf("Business %d upgraded: seats x%d. Total cost: %s stonky.", businessID, count, formatMicros(totalCost))
+	if employeeLimit > 0 {
+		msg += fmt.Sprintf(" Employee cap: %d.", employeeLimit)
+	}
+	printSuccess(msg)
+	return nil
+}
+
+func int64Field(raw map[string]any, key string) int64 {
+	v, ok := raw[key]
+	if !ok {
+		return 0
+	}
+	switch t := v.(type) {
+	case int:
+		return int64(t)
+	case int32:
+		return int64(t)
+	case int64:
+		return t
+	case float64:
+		return int64(t)
+	case json.Number:
+		n, _ := t.Int64()
+		return n
+	default:
+		return 0
+	}
 }
 
 func newBusinessReserveCmd(apiBase *string) *cobra.Command {

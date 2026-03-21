@@ -709,7 +709,7 @@ func runBusinessGuidedFlow(cmd *cobra.Command, apiBase *string) error {
 		if err != nil {
 			return err
 		}
-		upgrade, err := promptChoice("Upgrade", []string{"marketing", "rd", "automation", "compliance"}, "marketing")
+		upgrade, err := promptChoice("Upgrade", []string{"marketing", "rd", "automation", "compliance", "seats"}, "marketing")
 		if err != nil {
 			return err
 		}
@@ -1413,7 +1413,7 @@ func newBusinessUpgradesCmd(apiBase *string) *cobra.Command {
 		Short: "Buy strategic business upgrades",
 	}
 	upgrades.AddCommand(&cobra.Command{
-		Use:   "buy [business_id] [marketing|rd|automation|compliance]",
+		Use:   "buy [business_id] [marketing|rd|automation|compliance|seats]",
 		Short: "Purchase an upgrade level",
 		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -1429,7 +1429,7 @@ func newBusinessUpgradesCmd(apiBase *string) *cobra.Command {
 			if len(args) >= 2 {
 				upgrade = strings.ToLower(strings.TrimSpace(args[1]))
 			} else {
-				upgrade, err = promptChoice("Upgrade", []string{"marketing", "rd", "automation", "compliance"}, "marketing")
+				upgrade, err = promptChoice("Upgrade", []string{"marketing", "rd", "automation", "compliance", "seats"}, "marketing")
 				if err != nil {
 					return err
 				}

@@ -18,6 +18,8 @@ const (
 	MaxDebtLimitMicros = int64(100_000) * MicrosPerStonky
 
 	ShareScale = int64(10_000) // 1 share = 10_000 units.
+
+	MaxBusinessEmployees = int64(60_000)
 )
 
 var (
@@ -28,6 +30,7 @@ var (
 	ErrInsufficientShares   = errors.New("insufficient shares")
 	ErrBusinessLocked       = errors.New("business feature locked: net worth below requirement")
 	ErrUnauthorized         = errors.New("unauthorized")
+	ErrEmployeeLimitReached = errors.New("employee limit reached")
 	ErrTxConflict           = errors.New("transaction conflict: please retry")
 )
 

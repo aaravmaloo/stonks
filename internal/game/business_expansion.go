@@ -38,35 +38,31 @@ var fundUniverse = map[string][]string{
 	"STABLE": {"NIMBUS", "RUSTIC", "PYLONS", "JAVOLT", "KOTLIN", "DATUMX", "LUMINA"},
 }
 
-const seededCandidatePoolSize = 50_000
+const seededCandidatePoolSize = int(MaxBusinessEmployees)
 
-func candidatePool(target int) []struct {
+type generatedCandidate struct {
 	Name    string
 	Role    string
 	Trait   string
 	Cost    int64
 	Revenue int64
 	RiskBps int32
-} {
+}
+
+func candidatePool(start, count int) []generatedCandidate {
 	first := []string{"Maya", "Arun", "Iris", "Noah", "Tara", "Kian", "Lea", "Ravi", "Nora", "Evan", "Zara", "Omar", "Lina", "Kade", "Ava", "Dion", "Sana", "Milo", "Rhea", "Theo"}
 	last := []string{"Lee", "Vale", "Knox", "Pike", "Sol", "Moss", "Rowe", "Jain", "Park", "Reid", "Cross", "Quill", "Stone", "Wren", "Bose", "Cho", "Kent", "Ford", "Hart", "Yoon"}
 	roles := []string{"operator", "engineer", "sales", "finance", "product", "ops", "growth", "legal", "design", "analyst"}
 	traits := []string{"disciplined", "innovative", "charismatic", "conservative", "visionary", "resilient", "strategic", "meticulous", "adaptive", "ambitious"}
 
-	out := make([]struct {
-		Name    string
-		Role    string
-		Trait   string
-		Cost    int64
-		Revenue int64
-		RiskBps int32
-	}, 0, target)
-	for i := 0; i < target; i++ {
-		role := roles[i%len(roles)]
-		trait := traits[(i*3)%len(traits)]
-		revenue := int64(28+(i%12)*7) * MicrosPerStonky
-		cost := int64(420+(i%15)*95) * MicrosPerStonky
-		risk := int32(12 + (i*9)%88)
+	out := make([]generatedCandidate, 0, count)
+	for i := 0; i < count; i++ {
+		idx := start + i
+		role := roles[idx%len(roles)]
+		trait := traits[(idx*3)%len(traits)]
+		revenue := int64(28+(idx%12)*7) * MicrosPerStonky
+		cost := int64(420+(idx%15)*95) * MicrosPerStonky
+		risk := int32(12 + (idx*9)%88)
 		if role == "growth" || role == "sales" {
 			risk += 20
 			revenue += 10 * MicrosPerStonky
@@ -74,15 +70,8 @@ func candidatePool(target int) []struct {
 		if role == "finance" || role == "legal" {
 			risk -= 8
 		}
-		out = append(out, struct {
-			Name    string
-			Role    string
-			Trait   string
-			Cost    int64
-			Revenue int64
-			RiskBps int32
-		}{
-			Name:    fmt.Sprintf("%s %s", first[i%len(first)], last[(i*7)%len(last)]),
+		out = append(out, generatedCandidate{
+			Name:    fmt.Sprintf("%s %s", first[idx%len(first)], last[(idx*7)%len(last)]),
 			Role:    role,
 			Trait:   trait,
 			Cost:    cost,
@@ -624,8 +613,10 @@ func (s *Service) BuyBusinessUpgrade(ctx context.Context, in BusinessUpgradeInpu
 		col = "automation_level"
 	case "compliance":
 		col = "compliance_level"
+	case "seats":
+		col = "seat_capacity"
 	default:
-		return out, fmt.Errorf("upgrade must be one of: marketing, rd, automation, compliance")
+		return out, fmt.Errorf("upgrade must be one of: marketing, rd, automation, compliance, seats")
 	}
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -635,8 +626,76 @@ func (s *Service) BuyBusinessUpgrade(ctx context.Context, in BusinessUpgradeInpu
 	if err := claimIdempotency(ctx, tx, in.UserID, in.IdempotencyKey, "buy_business_upgrade"); err != nil {
 		return out, err
 	}
-	var level int32
 	var owner string
+	if upgrade == "seats" {
+		var seatCapacity int64
+		if err := tx.QueryRow(ctx, `
+			SELECT owner_user_id, seat_capacity
+			FROM game.businesses
+			WHERE id = $1 AND season_id = $2
+			FOR UPDATE
+		`, in.BusinessID, in.SeasonID).Scan(&owner, &seatCapacity); err != nil {
+			return out, err
+		}
+		if owner != in.UserID {
+			return out, ErrUnauthorized
+		}
+		seatCapacity = effectiveEmployeeLimit(seatCapacity)
+		if seatCapacity >= MaxBusinessEmployees {
+			return out, fmt.Errorf("seat capacity already at max")
+		}
+		step := SeatUpgradeIncrement
+		if seatCapacity+step > MaxBusinessEmployees {
+			step = MaxBusinessEmployees - seatCapacity
+		}
+		level := int((seatCapacity - BaseBusinessEmployeeLimit) / SeatUpgradeIncrement)
+		cost := int64(math.Round(float64((1_800+level*700)*int(MicrosPerStonky)) * (1 + float64(level)*0.18)))
+
+		var balance, peak int64
+		if err := tx.QueryRow(ctx, `
+			SELECT balance_micros, peak_net_worth_micros
+			FROM game.wallets
+			WHERE user_id = $1 AND season_id = $2
+			FOR UPDATE
+		`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+			return out, err
+		}
+		if balance-cost < -DebtLimitFromPeak(peak) {
+			return out, ErrInsufficientFunds
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE game.businesses
+			SET seat_capacity = LEAST($1, seat_capacity + $2), updated_at = now()
+			WHERE id = $3 AND season_id = $4
+		`, MaxBusinessEmployees, step, in.BusinessID, in.SeasonID); err != nil {
+			return out, err
+		}
+		balance -= cost
+		if _, err := tx.Exec(ctx, `
+			UPDATE game.wallets
+			SET balance_micros = $1, updated_at = now()
+			WHERE user_id = $2 AND season_id = $3
+		`, balance, in.UserID, in.SeasonID); err != nil {
+			return out, err
+		}
+		if err := appendLedgerEntries(ctx, tx, in.UserID, in.SeasonID, "business_upgrade_"+upgrade, cost, 0); err != nil {
+			return out, err
+		}
+		if err := s.updatePeakNetWorthTx(ctx, tx, in.UserID, in.SeasonID); err != nil {
+			return out, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return out, err
+		}
+		out["ok"] = true
+		out["upgrade"] = upgrade
+		out["new_level"] = level + 1
+		out["cost_micros"] = cost
+		out["employee_limit"] = seatCapacity + step
+		return out, nil
+	}
+
+	var level int32
 	query := fmt.Sprintf(`
 		SELECT owner_user_id, %s
 		FROM game.businesses

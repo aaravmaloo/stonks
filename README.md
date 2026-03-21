@@ -21,7 +21,7 @@ Stanks is a true CLI stock sandbox game written in Go.
 
 1. `stk signup`
 2. `stk login`
-3. You start with `25,000 stonky`.
+3. You start with `25,000 stonky` plus a `2,000 stonky` signup bonus.
 4. Browse market and trade:
    - `stk stocks list all`
    - `stk stocks list COBOLT`
@@ -34,6 +34,7 @@ Stanks is a true CLI stock sandbox game written in Go.
 6. Hire and train professionals for business revenue:
    - `stk business employees candidates`
    - `stk business employees hire <business_id> <candidate_id>`
+   - `stk business employees hire-many <business_id> <count> <best_value|high_output|low_risk>`
    - `stk business employees train <business_id> <employee_id>`
 7. Scale with machines and financing:
    - `stk business machinery buy <business_id> assembly_line`
@@ -87,6 +88,7 @@ Then:
 Economy tick also applies:
 
 - Business revenue credits/debits to owner wallets, now including:
+  - Employee salary costs
   - Professional risk drag
   - Machinery output + machinery upkeep
   - Business-loan interest accrual
@@ -96,6 +98,8 @@ Economy tick also applies:
     - `>=5` missed ticks: machinery repossession + employee productivity haircut
     - `>=9` missed ticks: forced liquidation (business closed, payout 0)
 - Debt interest accrual on negative balances (APR configurable, default `18%`).
+- Employee candidate replenishment every tick (`EMPLOYEE_PER_TICK`).
+- Optional random stock spawning every tick (`NEW_STOCKS_PER_TICK`) with starting prices below `100 stonky`.
 
 ## Anti-exploit safety model
 
@@ -121,6 +125,7 @@ Economy tick also applies:
 - `migrations/0004_business_depth.sql`: strategy/upgrades/brand/health/reserve columns.
 - `migrations/0005_active_business.sql`: active business pointer on wallets.
 - `migrations/0006_widen_market_price_columns.sql`: repair legacy `INTEGER` market-price columns to `BIGINT`.
+- `migrations/0007_business_seats.sql`: per-business seat capacity for employee scaling.
 
 ## Local setup
 
@@ -140,6 +145,8 @@ SUPABASE_URL=https://<project>.supabase.co
 SUPABASE_ANON_KEY=<anon-key>
 STANKS_API_ADDR=:8080
 STANKS_MARKET_TICK_EVERY=5m
+EMPLOYEE_PER_TICK=1
+NEW_STOCKS_PER_TICK=0
 STANKS_INTEREST_APR=0.18
 STANKS_STARTUP_SEED_STOCKS=true
 ```
@@ -161,6 +168,7 @@ psql "$DATABASE_URL" -f migrations/0003_loan_consequences.sql
 psql "$DATABASE_URL" -f migrations/0004_business_depth.sql
 psql "$DATABASE_URL" -f migrations/0005_active_business.sql
 psql "$DATABASE_URL" -f migrations/0006_widen_market_price_columns.sql
+psql "$DATABASE_URL" -f migrations/0007_business_seats.sql
 ```
 
 ### Run services
@@ -233,7 +241,8 @@ Alias:
 ### Business depth mechanics
 
 - Strategy modes with different risk/reward profiles.
-- Upgrade tree (`marketing`, `rd`, `automation`, `compliance`) with escalating costs.
+- Upgrade tree (`marketing`, `rd`, `automation`, `compliance`, `seats`) with escalating costs.
+- `seats` increases per-business employee capacity in blocks instead of keeping a flat cap.
 - Cash reserve treasury per business.
 - Reserve yield per tick (higher with R&D levels).
 - Reserve auto-shield when business cycle turns negative.
@@ -295,4 +304,4 @@ Current test coverage includes:
 - This repo assumes online-first gameplay; local queue is best-effort retry.
 - Email verification behavior follows Supabase project auth configuration.
 - Production ops details are in `deploy.md`.
-- Business candidate pool now seeds up to 50 professionals per season.
+- Business candidate pool now seeds up to 60,000 professionals per season and can grow every tick.

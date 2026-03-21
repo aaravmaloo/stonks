@@ -61,3 +61,18 @@ func TestLoadAPIFromEnvEmployeePerTickClampsNegative(t *testing.T) {
 		t.Fatalf("LoadAPIFromEnv().EmployeePerTick = %d, want 0", cfg.EmployeePerTick)
 	}
 }
+
+func TestLoadAPIFromEnvNewStocksPerTickAlias(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("SUPABASE_URL", "https://example.supabase.co")
+	t.Setenv("SUPABASE_ANON_KEY", "anon")
+	t.Setenv("new_stocks_per_tick", "9")
+
+	cfg, err := LoadAPIFromEnv()
+	if err != nil {
+		t.Fatalf("LoadAPIFromEnv() error = %v", err)
+	}
+	if cfg.NewStocksPerTick != 9 {
+		t.Fatalf("LoadAPIFromEnv().NewStocksPerTick = %d, want 9", cfg.NewStocksPerTick)
+	}
+}

@@ -15,6 +15,7 @@ type APIConfig struct {
 	SupabaseAnonKey   string
 	MarketTickEvery   time.Duration
 	EmployeePerTick   int
+	NewStocksPerTick  int
 	MarketVolatility  string
 	InterestAPR       float64
 	StartupSeedStocks bool
@@ -41,12 +42,16 @@ func LoadAPIFromEnv() (APIConfig, error) {
 		SupabaseAnonKey:   strings.TrimSpace(os.Getenv("SUPABASE_ANON_KEY")),
 		MarketTickEvery:   envDurationDefault("STANKS_MARKET_TICK_EVERY", 5*time.Minute),
 		EmployeePerTick:   envIntDefaultAlias([]string{"EMPLOYEE_PER_TICK", "employee_per_tick"}, 1),
+		NewStocksPerTick:  envIntDefaultAlias([]string{"NEW_STOCKS_PER_TICK", "new_stocks_per_tick"}, 0),
 		MarketVolatility:  envVolatilityDefault(),
 		InterestAPR:       envFloatDefault("STANKS_INTEREST_APR", 0.18),
 		StartupSeedStocks: envBoolDefault("STANKS_STARTUP_SEED_STOCKS", true),
 	}
 	if cfg.EmployeePerTick < 0 {
 		cfg.EmployeePerTick = 0
+	}
+	if cfg.NewStocksPerTick < 0 {
+		cfg.NewStocksPerTick = 0
 	}
 	if cfg.DatabaseURL == "" {
 		return cfg, fmt.Errorf("DATABASE_URL is required")

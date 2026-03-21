@@ -14,6 +14,7 @@ type APIConfig struct {
 	SupabaseURL       string
 	SupabaseAnonKey   string
 	MarketTickEvery   time.Duration
+	EmployeePerTick   int
 	MarketVolatility  string
 	InterestAPR       float64
 	StartupSeedStocks bool
@@ -39,9 +40,13 @@ func LoadAPIFromEnv() (APIConfig, error) {
 		SupabaseURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("SUPABASE_URL")), "/"),
 		SupabaseAnonKey:   strings.TrimSpace(os.Getenv("SUPABASE_ANON_KEY")),
 		MarketTickEvery:   envDurationDefault("STANKS_MARKET_TICK_EVERY", 5*time.Minute),
+		EmployeePerTick:   envIntDefaultAlias([]string{"EMPLOYEE_PER_TICK", "employee_per_tick"}, 1),
 		MarketVolatility:  envVolatilityDefault(),
 		InterestAPR:       envFloatDefault("STANKS_INTEREST_APR", 0.18),
 		StartupSeedStocks: envBoolDefault("STANKS_STARTUP_SEED_STOCKS", true),
+	}
+	if cfg.EmployeePerTick < 0 {
+		cfg.EmployeePerTick = 0
 	}
 	if cfg.DatabaseURL == "" {
 		return cfg, fmt.Errorf("DATABASE_URL is required")
@@ -57,8 +62,22 @@ func LoadAPIFromEnv() (APIConfig, error) {
 
 func LoadCLIFromEnv() CLIConfig {
 	return CLIConfig{
-		APIBaseURL: strings.TrimRight(envDefault("STK_API_BASE_URL", "api-production-d3e2.up.railway.app"), "/"),
+		APIBaseURL: normalizeCLIBaseURL(envDefault("STK_API_BASE_URL", "https://stanks-api.fxtun.dev")),
 	}
+}
+
+func normalizeCLIBaseURL(raw string) string {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if base == "" {
+		return ""
+	}
+	if strings.Contains(base, "://") {
+		return base
+	}
+	if strings.HasPrefix(base, "localhost") || strings.HasPrefix(base, "127.0.0.1") {
+		return "http://" + base
+	}
+	return "https://" + base
 }
 
 func envDefault(key, fallback string) string {
@@ -91,6 +110,21 @@ func envFloatDefault(key string, fallback float64) float64 {
 		return fallback
 	}
 	return f
+}
+
+func envIntDefaultAlias(keys []string, fallback int) int {
+	for _, key := range keys {
+		v := strings.TrimSpace(os.Getenv(key))
+		if v == "" {
+			continue
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fallback
+		}
+		return n
+	}
+	return fallback
 }
 
 func envBoolDefault(key string, fallback bool) bool {

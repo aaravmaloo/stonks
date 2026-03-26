@@ -5,7 +5,7 @@ Stanks is a true CLI stock sandbox game written in Go.
 - Game name: `stanks`
 - CLI command: `stk`
 - Currency: `stonky`
-- Backend: Supabase Auth + Supabase Postgres
+- Backend: Local auth + Postgres
 - Runtime: Go API + Go worker
 
 ## What this repository includes
@@ -116,7 +116,7 @@ Economy tick also applies:
 - `cmd/stk`: CLI binary.
 - `cmd/stanks-api`: HTTP API server.
 - `cmd/stanks-worker`: market/economy worker.
-- `internal/auth`: Supabase Auth REST integration.
+- `internal/auth`: Local Postgres-backed auth service.
 - `internal/game`: gameplay engine.
 - `internal/api`: HTTP handlers + auth middleware.
 - `migrations/0001_init.sql`: core DB schema.
@@ -132,8 +132,7 @@ Economy tick also applies:
 ### Prerequisites
 
 - Go 1.25+
-- Supabase project
-- Postgres URL from Supabase
+- PostgreSQL server
 
 ### Environment variables
 
@@ -141,8 +140,6 @@ Set for API and worker:
 
 ```bash
 DATABASE_URL=postgres://...
-SUPABASE_URL=https://<project>.supabase.co
-SUPABASE_ANON_KEY=<anon-key>
 STANKS_API_ADDR=:8080
 STANKS_MARKET_TICK_EVERY=5m
 EMPLOYEE_PER_TICK=1
@@ -300,8 +297,7 @@ Current test coverage includes:
 
 ## Important notes
 
-- Supabase project/server provisioning is intentionally manual.
 - This repo assumes online-first gameplay; local queue is best-effort retry.
-- Email verification behavior follows Supabase project auth configuration.
+- Auth records are stored in `auth.users` with bcrypt password hashes and bearer tokens.
 - Production ops details are in `deploy.md`.
 - Business candidate pool now seeds up to 60,000 professionals per season and can grow every tick.

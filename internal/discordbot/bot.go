@@ -86,7 +86,7 @@ func New(cfg config.DiscordBotConfig, logger *slog.Logger, store *Store) (*Bot, 
 	if err != nil {
 		return nil, err
 	}
-	session.Identify.Intents = discordgo.IntentsGuilds
+	session.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsDirectMessages
 
 	b := &Bot{
 		log:      logger,
@@ -134,7 +134,7 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 		{Name: "high_output", Value: "high_output"},
 		{Name: "low_risk", Value: "low_risk"},
 	}
-	return []*discordgo.ApplicationCommand{
+	commands := []*discordgo.ApplicationCommand{
 		{Name: "signup", Description: "Create your Stanks account"},
 		{Name: "login", Description: "Log into your Stanks account"},
 		{Name: "logout", Description: "Disconnect your Discord account from Stanks"},
@@ -203,11 +203,36 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 			},
 		},
 	}
+	contexts := []discordgo.InteractionContextType{
+		discordgo.InteractionContextGuild,
+		discordgo.InteractionContextBotDM,
+	}
+	integrationTypes := []discordgo.ApplicationIntegrationType{
+		discordgo.ApplicationIntegrationGuildInstall,
+		discordgo.ApplicationIntegrationUserInstall,
+	}
+	for _, cmd := range commands {
+		dmAllowed := true
+		cmd.DMPermission = &dmAllowed
+		cmd.Contexts = &contexts
+		cmd.IntegrationTypes = &integrationTypes
+	}
+	return commands
 }
 
 func (b *Bot) syncCommands() error {
 	appID := b.session.State.User.ID
-	existing, err := b.session.ApplicationCommands(appID, b.guildID)
+	if err := b.syncCommandsForScope(appID, ""); err != nil {
+		return err
+	}
+	if strings.TrimSpace(b.guildID) == "" {
+		return nil
+	}
+	return b.syncCommandsForScope(appID, b.guildID)
+}
+
+func (b *Bot) syncCommandsForScope(appID, scope string) error {
+	existing, err := b.session.ApplicationCommands(appID, scope)
 	if err != nil {
 		return err
 	}
@@ -217,13 +242,13 @@ func (b *Bot) syncCommands() error {
 	}
 	for _, cmd := range existing {
 		if _, ok := want[cmd.Name]; ok {
-			if err := b.session.ApplicationCommandDelete(appID, b.guildID, cmd.ID); err != nil {
+			if err := b.session.ApplicationCommandDelete(appID, scope, cmd.ID); err != nil {
 				return err
 			}
 		}
 	}
 	for _, cmd := range b.commands {
-		if _, err := b.session.ApplicationCommandCreate(appID, b.guildID, cmd); err != nil {
+		if _, err := b.session.ApplicationCommandCreate(appID, scope, cmd); err != nil {
 			return err
 		}
 	}
@@ -336,7 +361,11 @@ func (b *Bot) handleSignupModal(ctx context.Context, s *discordgo.Session, i *di
 	if err != nil {
 		return b.respondError(s, i, trimAPIError(err))
 	}
-	if err := b.store.SaveSession(ctx, i.Member.User.ID, session.User.Email, session.AccessToken); err != nil {
+	userID, err := interactionUserID(i)
+	if err != nil {
+		return err
+	}
+	if err := b.store.SaveSession(ctx, userID, session.User.Email, session.AccessToken); err != nil {
 		return err
 	}
 	return b.respondEmbed(s, i, successEmbed("Account Ready", "Your Stanks account is live and linked to this Discord user.", []*discordgo.MessageEmbedField{
@@ -353,7 +382,11 @@ func (b *Bot) handleLoginModal(ctx context.Context, s *discordgo.Session, i *dis
 	if err != nil {
 		return b.respondError(s, i, trimAPIError(err))
 	}
-	if err := b.store.SaveSession(ctx, i.Member.User.ID, session.User.Email, session.AccessToken); err != nil {
+	userID, err := interactionUserID(i)
+	if err != nil {
+		return err
+	}
+	if err := b.store.SaveSession(ctx, userID, session.User.Email, session.AccessToken); err != nil {
 		return err
 	}
 	return b.respondEmbed(s, i, successEmbed("Logged In", "Your Discord account is now connected to Stanks.", []*discordgo.MessageEmbedField{
@@ -362,7 +395,11 @@ func (b *Bot) handleLoginModal(ctx context.Context, s *discordgo.Session, i *dis
 }
 
 func (b *Bot) handleLogout(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	if err := b.store.DeleteSession(ctx, i.Member.User.ID); err != nil {
+	userID, err := interactionUserID(i)
+	if err != nil {
+		return err
+	}
+	if err := b.store.DeleteSession(ctx, userID); err != nil {
 		return err
 	}
 	return b.respondEmbed(s, i, infoEmbed("Logged Out", "This Discord account is no longer linked to a Stanks session.", nil))
@@ -698,7 +735,11 @@ func (b *Bot) handleLeaderboard(ctx context.Context, s *discordgo.Session, i *di
 }
 
 func (b *Bot) requireSession(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) (string, string, error) {
-	record, err := b.store.GetSession(ctx, i.Member.User.ID)
+	userID, err := interactionUserID(i)
+	if err != nil {
+		return "", "", err
+	}
+	record, err := b.store.GetSession(ctx, userID)
 	if err == nil {
 		return record.AccessToken, record.Email, nil
 	}
@@ -710,7 +751,9 @@ func (b *Bot) requireSession(ctx context.Context, s *discordgo.Session, i *disco
 
 func (b *Bot) respondAuthAwareError(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, err error) error {
 	if isUnauthorizedAPIError(err) {
-		_ = b.store.DeleteSession(ctx, i.Member.User.ID)
+		if userID, userErr := interactionUserID(i); userErr == nil {
+			_ = b.store.DeleteSession(ctx, userID)
+		}
 		return b.respondError(s, i, "Your Stanks session expired. Run `/login` again.")
 	}
 	return b.respondError(s, i, trimAPIError(err))
@@ -898,6 +941,19 @@ func numberOption(options []*discordgo.ApplicationCommandInteractionDataOption, 
 		}
 	}
 	return fallback
+}
+
+func interactionUserID(i *discordgo.InteractionCreate) (string, error) {
+	if i == nil {
+		return "", fmt.Errorf("missing interaction")
+	}
+	if i.Member != nil && i.Member.User != nil && strings.TrimSpace(i.Member.User.ID) != "" {
+		return i.Member.User.ID, nil
+	}
+	if i.User != nil && strings.TrimSpace(i.User.ID) != "" {
+		return i.User.ID, nil
+	}
+	return "", fmt.Errorf("missing interaction user")
 }
 
 func toInt64(v any) (int64, bool) {

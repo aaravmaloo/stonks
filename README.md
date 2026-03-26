@@ -201,7 +201,8 @@ Notes:
 
 - The bot reads `DISCORD_BOT_TOKEN` and `STK_API_BASE_URL`.
 - Set `DISCORD_GUILD_ID` to register commands instantly in one server during development.
-- If `DISCORD_GUILD_ID` is empty, commands register globally.
+- The bot always registers a global command set so slash commands can also be used in DMs with the bot.
+- If `DISCORD_GUILD_ID` is empty, commands register globally only.
 
 ## CLI command reference
 

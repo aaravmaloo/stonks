@@ -13,6 +13,7 @@ import (
 func EnsureTables(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := pool.Exec(ctx, `
 		CREATE SCHEMA IF NOT EXISTS auth;
+		CREATE SCHEMA IF NOT EXISTS game;
 		CREATE TABLE IF NOT EXISTS auth.users (
 			id TEXT PRIMARY KEY,
 			email TEXT NOT NULL UNIQUE,
@@ -29,6 +30,15 @@ func EnsureTables(ctx context.Context, pool *pgxpool.Pool) error {
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_users_access_token
 			ON auth.users (access_token)
 			WHERE access_token IS NOT NULL;
+		CREATE TABLE IF NOT EXISTS game.discord_sessions (
+			discord_user_id TEXT PRIMARY KEY,
+			email TEXT NOT NULL,
+			access_token TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+		CREATE INDEX IF NOT EXISTS idx_discord_sessions_updated_at
+			ON game.discord_sessions (updated_at DESC);
 	`); err != nil {
 		return fmt.Errorf("ensure auth tables: %w", err)
 	}

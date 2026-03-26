@@ -46,7 +46,21 @@ func (c *Client) SignUp(ctx context.Context, email, password string) (Session, e
 		return Session{}, fmt.Errorf("hash password: %w", err)
 	}
 
-	userID := uuid.NewString()
+	// If game data was restored but auth isn't, reuse the existing user_id
+	// from `users.profiles` so wallet/business/positions still belong to this account.
+	userID := ""
+	if err := c.db.QueryRow(ctx, `
+		SELECT user_id
+		FROM users.profiles
+		WHERE email = $1
+	`, email).Scan(&userID); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, fmt.Errorf("load profile user_id: %w", err)
+		}
+	}
+	if strings.TrimSpace(userID) == "" {
+		userID = uuid.NewString()
+	}
 	token := uuid.NewString()
 
 	_, err = c.db.Exec(ctx, `

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 
 	cl "stanks/internal/cli"
 	"stanks/internal/config"
+	"stanks/internal/db"
 	"stanks/internal/game"
 	"stanks/internal/syncq"
 
@@ -20,6 +22,20 @@ import (
 )
 
 func main() {
+	if databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL")); databaseURL != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		pool, err := db.Connect(ctx, databaseURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: db connect failed for bootstrap: %v\n", err)
+		} else {
+			if err := db.EnsureTables(ctx, pool); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: db bootstrap failed: %v\n", err)
+			}
+			pool.Close()
+		}
+	}
+
 	cfg := config.LoadCLIFromEnv()
 	apiBase := cfg.APIBaseURL
 
@@ -52,6 +68,7 @@ func main() {
 	}
 
 	if err := root.Execute(); err != nil {
+		slog.Error("stk command failed", "err", err)
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

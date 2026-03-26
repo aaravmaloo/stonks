@@ -33,8 +33,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+	if err := db.EnsureTables(ctx, pool); err != nil {
+		logger.Error("db bootstrap failed", "err", err)
+		os.Exit(1)
+	}
 
-	authClient := auth.NewSupabaseClient(cfg.SupabaseURL, cfg.SupabaseAnonKey)
+	authClient := auth.NewClient(pool)
 	gameSvc := game.NewService(pool, logger)
 
 	seasonID, err := gameSvc.ActiveSeasonID(ctx)

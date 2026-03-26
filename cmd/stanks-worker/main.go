@@ -31,6 +31,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+	if err := db.EnsureTables(ctx, pool); err != nil {
+		logger.Error("db bootstrap failed", "err", err)
+		os.Exit(1)
+	}
 
 	svc := game.NewService(pool, logger)
 	seasonID, err := svc.ActiveSeasonID(ctx)

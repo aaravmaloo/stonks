@@ -11,6 +11,7 @@ Stanks is a true CLI stock sandbox game written in Go.
 ## What this repository includes
 
 - `stk` CLI with auth, dashboard, trading, business, stocks, social, and sync commands.
+- `stanks-discord-bot` slash-command Discord bot with embeds and modal-based auth.
 - `stanks-api` HTTP backend for game logic.
 - `stanks-worker` scheduled market + economy engine.
 - Postgres migration for all core schemas/tables.
@@ -154,6 +155,13 @@ Set for CLI:
 STK_API_BASE_URL=http://localhost:8080
 ```
 
+Set for Discord bot:
+
+```bash
+DISCORD_BOT_TOKEN=your_bot_token
+DISCORD_GUILD_ID=optional_dev_guild_id
+```
+
 ### Run migration
 
 Apply SQL file:
@@ -166,6 +174,8 @@ psql "$DATABASE_URL" -f migrations/0004_business_depth.sql
 psql "$DATABASE_URL" -f migrations/0005_active_business.sql
 psql "$DATABASE_URL" -f migrations/0006_widen_market_price_columns.sql
 psql "$DATABASE_URL" -f migrations/0007_business_seats.sql
+psql "$DATABASE_URL" -f migrations/0008_business_employee_count.sql
+psql "$DATABASE_URL" -f migrations/0009_discord_sessions.sql
 ```
 
 ### Run services
@@ -180,6 +190,18 @@ go run ./cmd/stanks-worker
 ```bash
 go run ./cmd/stk
 ```
+
+### Run Discord Bot
+
+```bash
+go run ./cmd/stanks-discord-bot
+```
+
+Notes:
+
+- The bot reads `DISCORD_BOT_TOKEN` and `STK_API_BASE_URL`.
+- Set `DISCORD_GUILD_ID` to register commands instantly in one server during development.
+- If `DISCORD_GUILD_ID` is empty, commands register globally.
 
 ## CLI command reference
 

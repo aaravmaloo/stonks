@@ -24,6 +24,13 @@ type CLIConfig struct {
 	APIBaseURL string
 }
 
+type DiscordBotConfig struct {
+	DatabaseURL string
+	APIBaseURL  string
+	BotToken    string
+	GuildID     string
+}
+
 func LoadAPIFromEnv() (APIConfig, error) {
 	addr := os.Getenv("PORT")
 	if addr != "" {
@@ -61,6 +68,25 @@ func LoadCLIFromEnv() CLIConfig {
 	return CLIConfig{
 		APIBaseURL: normalizeCLIBaseURL(envDefault("STK_API_BASE_URL", "https://stanks-api.fxtun.dev")),
 	}
+}
+
+func LoadDiscordBotFromEnv() (DiscordBotConfig, error) {
+	cfg := DiscordBotConfig{
+		DatabaseURL: strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		APIBaseURL:  normalizeCLIBaseURL(envDefault("STK_API_BASE_URL", "https://stanks-api.fxtun.dev")),
+		BotToken:    strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")),
+		GuildID:     strings.TrimSpace(os.Getenv("DISCORD_GUILD_ID")),
+	}
+	if cfg.DatabaseURL == "" {
+		return cfg, fmt.Errorf("DATABASE_URL is required")
+	}
+	if cfg.APIBaseURL == "" {
+		return cfg, fmt.Errorf("STK_API_BASE_URL is required")
+	}
+	if cfg.BotToken == "" {
+		return cfg, fmt.Errorf("DISCORD_BOT_TOKEN is required")
+	}
+	return cfg, nil
 }
 
 func normalizeCLIBaseURL(raw string) string {

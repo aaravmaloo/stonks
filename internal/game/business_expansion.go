@@ -888,9 +888,13 @@ func (s *Service) SellBusinessToBank(ctx context.Context, userID string, seasonI
 	var machineryOutput, machineryUpkeep int64
 	var loanOutstanding int64
 	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(SUM(revenue_per_tick_micros), 0), COUNT(1)
-		FROM game.business_employees
-		WHERE business_id = $1 AND season_id = $2
+		SELECT COALESCE(SUM(be.revenue_per_tick_micros), 0), b.employee_count
+		FROM game.businesses b
+		LEFT JOIN game.business_employees be
+			ON be.business_id = b.id
+		   AND be.season_id = b.season_id
+		WHERE b.id = $1 AND b.season_id = $2
+		GROUP BY b.employee_count
 	`, businessID, seasonID).Scan(&employeeRevenue, &employeeCount); err != nil {
 		return out, err
 	}

@@ -245,7 +245,7 @@ func loadBusinessCyclesTx(ctx context.Context, tx pgx.Tx, seasonID int64, ownerU
 		       b.operational_health_bps,
 		       b.cash_reserve_micros,
 		       COALESCE(be.employee_revenue, 0) AS employee_revenue,
-		       COALESCE(be.employee_count, 0) AS employee_count,
+		       b.employee_count AS employee_count,
 		       COALESCE(be.avg_risk_bps, 0) AS avg_risk_bps,
 		       COALESCE(be.ops_count, 0) AS ops_count,
 		       COALESCE(be.engineer_count, 0) AS engineer_count,
@@ -266,7 +266,6 @@ func loadBusinessCyclesTx(ctx context.Context, tx pgx.Tx, seasonID int64, ownerU
 		FROM game.businesses b
 		LEFT JOIN LATERAL (
 			SELECT COALESCE(SUM(be.revenue_per_tick_micros), 0) AS employee_revenue,
-			       COUNT(1) AS employee_count,
 			       COALESCE(AVG(be.risk_bps), 0) AS avg_risk_bps,
 			       COALESCE(SUM(CASE WHEN be.role = 'ops' THEN 1 ELSE 0 END), 0) AS ops_count,
 			       COALESCE(SUM(CASE WHEN be.role = 'engineer' THEN 1 ELSE 0 END), 0) AS engineer_count,
@@ -870,23 +869,19 @@ func (s *Service) HireEmployee(ctx context.Context, in HireEmployeeInput) error 
 	}
 
 	var ownerID string
-	var employeeLimit int64
+	var employeeLimit, currentEmployees int64
 	if err := tx.QueryRow(ctx, `
-		SELECT owner_user_id, seat_capacity
+		SELECT owner_user_id, seat_capacity, employee_count
 		FROM game.businesses
 		WHERE id = $1 AND season_id = $2
 		FOR UPDATE
-	`, in.BusinessID, in.SeasonID).Scan(&ownerID, &employeeLimit); err != nil {
+	`, in.BusinessID, in.SeasonID).Scan(&ownerID, &employeeLimit, &currentEmployees); err != nil {
 		return err
 	}
 	if ownerID != in.UserID {
 		return ErrUnauthorized
 	}
 	employeeLimit = effectiveEmployeeLimit(employeeLimit)
-	currentEmployees, err := businessEmployeeCountTx(ctx, tx, in.BusinessID, in.SeasonID)
-	if err != nil {
-		return err
-	}
 	if currentEmployees >= employeeLimit {
 		return ErrEmployeeLimitReached
 	}
@@ -922,6 +917,13 @@ func (s *Service) HireEmployee(ctx context.Context, in HireEmployeeInput) error 
 		    ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, in.BusinessID, in.SeasonID, in.CandidateID, candidateName, role, trait, revenue, risk)
 	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE game.businesses
+		SET employee_count = employee_count + 1, updated_at = now()
+		WHERE id = $1 AND season_id = $2
+	`, in.BusinessID, in.SeasonID); err != nil {
 		return err
 	}
 
@@ -972,23 +974,19 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 			}
 
 			var ownerID string
-			var employeeLimit int64
+			var employeeLimit, currentEmployees int64
 			if err := tx.QueryRow(ctx, `
-				SELECT owner_user_id, seat_capacity
+				SELECT owner_user_id, seat_capacity, employee_count
 				FROM game.businesses
 				WHERE id = $1 AND season_id = $2
 				FOR UPDATE
-			`, in.BusinessID, in.SeasonID).Scan(&ownerID, &employeeLimit); err != nil {
+			`, in.BusinessID, in.SeasonID).Scan(&ownerID, &employeeLimit, &currentEmployees); err != nil {
 				return err
 			}
 			if ownerID != in.UserID {
 				return ErrUnauthorized
 			}
 			employeeLimit = effectiveEmployeeLimit(employeeLimit)
-			currentEmployees, err := businessEmployeeCountTx(ctx, tx, in.BusinessID, in.SeasonID)
-			if err != nil {
-				return err
-			}
 			if currentEmployees >= employeeLimit {
 				return ErrEmployeeLimitReached
 			}
@@ -1046,6 +1044,13 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 				[]string{"business_id", "season_id", "source_candidate_id", "full_name", "role", "trait", "revenue_per_tick_micros", "risk_bps"},
 				pgx.CopyFromRows(copyRows),
 			); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE game.businesses
+				SET employee_count = employee_count + $1, updated_at = now()
+				WHERE id = $2 AND season_id = $3
+			`, len(shortlist), in.BusinessID, in.SeasonID); err != nil {
 				return err
 			}
 
@@ -1128,23 +1133,18 @@ func (s *Service) QuoteHireEmployeesBulk(ctx context.Context, in BulkHireEmploye
 	defer tx.Rollback(ctx)
 
 	var ownerID string
-	var employeeLimit int64
+	var employeeLimit, currentEmployees int64
 	if err := tx.QueryRow(ctx, `
-		SELECT owner_user_id, seat_capacity
+		SELECT owner_user_id, seat_capacity, employee_count
 		FROM game.businesses
 		WHERE id = $1 AND season_id = $2
-	`, in.BusinessID, in.SeasonID).Scan(&ownerID, &employeeLimit); err != nil {
+	`, in.BusinessID, in.SeasonID).Scan(&ownerID, &employeeLimit, &currentEmployees); err != nil {
 		return out, err
 	}
 	if ownerID != in.UserID {
 		return out, ErrUnauthorized
 	}
 	employeeLimit = effectiveEmployeeLimit(employeeLimit)
-
-	currentEmployees, err := businessEmployeeCountTx(ctx, tx, in.BusinessID, in.SeasonID)
-	if err != nil {
-		return out, err
-	}
 	if currentEmployees >= employeeLimit {
 		return out, ErrEmployeeLimitReached
 	}
@@ -1759,16 +1759,6 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 	return tx.Commit(ctx)
 }
 
-func businessEmployeeCountTx(ctx context.Context, tx pgx.Tx, businessID, seasonID int64) (int64, error) {
-	var count int64
-	err := tx.QueryRow(ctx, `
-		SELECT COUNT(1)
-		FROM game.business_employees
-		WHERE business_id = $1 AND season_id = $2
-	`, businessID, seasonID).Scan(&count)
-	return count, err
-}
-
 func ensureMinimumEmployeeCandidatesTx(ctx context.Context, tx pgx.Tx, seasonID int64, minimum int) error {
 	if minimum <= 0 {
 		return nil
@@ -2034,9 +2024,9 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		       b.compliance_level,
 		       b.brand_bps,
 		       b.operational_health_bps,
-	       b.cash_reserve_micros,
+		       b.cash_reserve_micros,
 		       COALESCE(be.employee_revenue, 0) AS employee_revenue,
-		       COALESCE(be.employee_count, 0) AS employee_count,
+		       b.employee_count AS employee_count,
 		       COALESCE(be.avg_risk_bps, 0) AS avg_risk_bps,
 		       COALESCE(be.ops_count, 0) AS ops_count,
 		       COALESCE(be.engineer_count, 0) AS engineer_count,
@@ -2052,7 +2042,6 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		FROM game.businesses b
 		LEFT JOIN LATERAL (
 			SELECT COALESCE(SUM(be.revenue_per_tick_micros), 0) AS employee_revenue,
-			       COUNT(1) AS employee_count,
 			       COALESCE(AVG(be.risk_bps), 0) AS avg_risk_bps,
 			       COALESCE(SUM(CASE WHEN be.role = 'ops' THEN 1 ELSE 0 END), 0) AS ops_count,
 			       COALESCE(SUM(CASE WHEN be.role = 'engineer' THEN 1 ELSE 0 END), 0) AS engineer_count,
@@ -2283,7 +2272,7 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		}
 
 		if c.brandBps < 8200 && c.employeeCount > 0 && nextFloat() < 0.015 {
-			if _, err := tx.Exec(ctx, `
+			cmd, err := tx.Exec(ctx, `
 				DELETE FROM game.business_employees
 				WHERE id = (
 					SELECT id
@@ -2292,8 +2281,18 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 					ORDER BY random()
 					LIMIT 1
 				)
-			`, seasonID, c.businessID); err != nil {
+			`, seasonID, c.businessID)
+			if err != nil {
 				return err
+			}
+			if cmd.RowsAffected() > 0 {
+				if _, err := tx.Exec(ctx, `
+					UPDATE game.businesses
+					SET employee_count = GREATEST(0, employee_count - 1), updated_at = now()
+					WHERE id = $1 AND season_id = $2
+				`, c.businessID, seasonID); err != nil {
+					return err
+				}
 			}
 		}
 

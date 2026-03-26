@@ -276,35 +276,35 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 	case "login":
 		err = b.openAuthModal(s, i, loginModalID, "Log Into Stanks", false)
 	case "logout":
-		err = b.handleLogout(ctx, s, i)
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleLogout(ctx, s, i) })
 	case "dashboard":
-		err = b.handleDashboard(ctx, s, i)
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleDashboard(ctx, s, i) })
 	case "wallet":
-		err = b.handleWallet(ctx, s, i)
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleWallet(ctx, s, i) })
 	case "stocks":
-		err = b.handleStocks(ctx, s, i)
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleStocks(ctx, s, i) })
 	case "stock":
-		err = b.handleStock(ctx, s, i)
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleStock(ctx, s, i) })
 	case "order":
-		err = b.handleOrder(ctx, s, i)
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleOrder(ctx, s, i) })
 	case "business-create":
-		err = b.handleBusinessCreate(ctx, s, i)
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleBusinessCreate(ctx, s, i) })
 	case "business":
-		err = b.handleBusiness(ctx, s, i)
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleBusiness(ctx, s, i) })
 	case "candidates":
-		err = b.handleCandidates(ctx, s, i)
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleCandidates(ctx, s, i) })
 	case "employees":
-		err = b.handleEmployees(ctx, s, i)
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleEmployees(ctx, s, i) })
 	case "hire-many":
-		err = b.handleHireMany(ctx, s, i)
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleHireMany(ctx, s, i) })
 	case "leaderboard":
-		err = b.handleLeaderboard(ctx, s, i)
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleLeaderboard(ctx, s, i) })
 	default:
-		err = b.respondError(s, i, "Unknown command.")
+		err = b.respondImmediateError(s, i, "Unknown command.")
 	}
 	if err != nil {
 		b.log.Error("discord interaction failed", "command", data.Name, "err", err)
-		_ = b.respondError(s, i, "That request failed. Check the bot logs if it keeps happening.")
+		_ = b.respondFallbackError(s, i, "That request failed. Check the bot logs if it keeps happening.")
 	}
 }
 
@@ -313,6 +313,11 @@ func (b *Bot) handleModal(s *discordgo.Session, i *discordgo.InteractionCreate) 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
+	if err := b.beginDeferredResponse(s, i); err != nil {
+		b.log.Error("discord modal defer failed", "custom_id", data.CustomID, "err", err)
+		return
+	}
+
 	var err error
 	switch data.CustomID {
 	case signupModalID:
@@ -320,11 +325,11 @@ func (b *Bot) handleModal(s *discordgo.Session, i *discordgo.InteractionCreate) 
 	case loginModalID:
 		err = b.handleLoginModal(ctx, s, i, modalValues(data.Components))
 	default:
-		err = b.respondError(s, i, "Unknown modal.")
+		err = b.respondEmbed(s, i, errorEmbed("Unknown modal."))
 	}
 	if err != nil {
 		b.log.Error("discord modal failed", "custom_id", data.CustomID, "err", err)
-		_ = b.respondError(s, i, "That request failed. Check the bot logs if it keeps happening.")
+		_ = b.respondEmbed(s, i, errorEmbed("That request failed. Check the bot logs if it keeps happening."))
 	}
 }
 
@@ -759,18 +764,49 @@ func (b *Bot) respondAuthAwareError(ctx context.Context, s *discordgo.Session, i
 	return b.respondError(s, i, trimAPIError(err))
 }
 
-func (b *Bot) respondEmbed(s *discordgo.Session, i *discordgo.InteractionCreate, embed *discordgo.MessageEmbed) error {
+func (b *Bot) runDeferred(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, fn func() error) error {
+	if err := b.beginDeferredResponse(s, i); err != nil {
+		return err
+	}
+	return fn()
+}
+
+func (b *Bot) beginDeferredResponse(s *discordgo.Session, i *discordgo.InteractionCreate) error {
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Flags:  discordgo.MessageFlagsEphemeral,
-			Embeds: []*discordgo.MessageEmbed{embed},
+			Flags: discordgo.MessageFlagsEphemeral,
 		},
 	})
 }
 
+func (b *Bot) respondEmbed(s *discordgo.Session, i *discordgo.InteractionCreate, embed *discordgo.MessageEmbed) error {
+	embeds := []*discordgo.MessageEmbed{embed}
+	_, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Embeds: &embeds,
+	})
+	return err
+}
+
 func (b *Bot) respondError(s *discordgo.Session, i *discordgo.InteractionCreate, message string) error {
 	return b.respondEmbed(s, i, errorEmbed(message))
+}
+
+func (b *Bot) respondImmediateError(s *discordgo.Session, i *discordgo.InteractionCreate, message string) error {
+	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Flags:  discordgo.MessageFlagsEphemeral,
+			Embeds: []*discordgo.MessageEmbed{errorEmbed(message)},
+		},
+	})
+}
+
+func (b *Bot) respondFallbackError(s *discordgo.Session, i *discordgo.InteractionCreate, message string) error {
+	if err := b.respondEmbed(s, i, errorEmbed(message)); err == nil {
+		return nil
+	}
+	return b.respondImmediateError(s, i, message)
 }
 
 func successEmbed(title, description string, fields []*discordgo.MessageEmbedField) *discordgo.MessageEmbed {

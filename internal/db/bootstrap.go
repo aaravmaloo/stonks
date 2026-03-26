@@ -39,6 +39,33 @@ func EnsureTables(ctx context.Context, pool *pgxpool.Pool) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_discord_sessions_updated_at
 			ON game.discord_sessions (updated_at DESC);
+		ALTER TABLE game.businesses
+			ADD COLUMN IF NOT EXISTS strategy TEXT NOT NULL DEFAULT 'balanced',
+			ADD COLUMN IF NOT EXISTS marketing_level INT NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS rd_level INT NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS automation_level INT NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS compliance_level INT NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS brand_bps INT NOT NULL DEFAULT 10000,
+			ADD COLUMN IF NOT EXISTS operational_health_bps INT NOT NULL DEFAULT 10000,
+			ADD COLUMN IF NOT EXISTS cash_reserve_micros BIGINT NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS last_event TEXT NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS seat_capacity BIGINT NOT NULL DEFAULT 60000,
+			ADD COLUMN IF NOT EXISTS employee_count BIGINT NOT NULL DEFAULT 0;
+		UPDATE game.businesses
+		SET seat_capacity = 60000
+		WHERE seat_capacity IS NULL OR seat_capacity <= 0;
+		UPDATE game.businesses
+		SET employee_count = 0
+		WHERE employee_count IS NULL OR employee_count < 0;
+		UPDATE game.businesses b
+		SET employee_count = counts.employee_count
+		FROM (
+			SELECT business_id, COUNT(*)::bigint AS employee_count
+			FROM game.business_employees
+			GROUP BY business_id
+		) counts
+		WHERE b.id = counts.business_id
+		  AND COALESCE(b.employee_count, 0) <> counts.employee_count;
 	`); err != nil {
 		return fmt.Errorf("ensure auth tables: %w", err)
 	}

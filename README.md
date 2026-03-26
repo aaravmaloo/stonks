@@ -176,6 +176,7 @@ psql "$DATABASE_URL" -f migrations/0006_widen_market_price_columns.sql
 psql "$DATABASE_URL" -f migrations/0007_business_seats.sql
 psql "$DATABASE_URL" -f migrations/0008_business_employee_count.sql
 psql "$DATABASE_URL" -f migrations/0009_discord_sessions.sql
+psql "$DATABASE_URL" -f migrations/0010_auth_users_local_columns.sql
 ```
 
 ### Run services

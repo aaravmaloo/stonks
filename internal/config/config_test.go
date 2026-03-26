@@ -37,8 +37,6 @@ func TestLoadCLIFromEnvDefaultUsesHTTPS(t *testing.T) {
 
 func TestLoadAPIFromEnvEmployeePerTickAlias(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
-	t.Setenv("SUPABASE_URL", "https://example.supabase.co")
-	t.Setenv("SUPABASE_ANON_KEY", "anon")
 	t.Setenv("employee_per_tick", "7")
 
 	cfg, err := LoadAPIFromEnv()
@@ -52,8 +50,6 @@ func TestLoadAPIFromEnvEmployeePerTickAlias(t *testing.T) {
 
 func TestLoadAPIFromEnvEmployeePerTickClampsNegative(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
-	t.Setenv("SUPABASE_URL", "https://example.supabase.co")
-	t.Setenv("SUPABASE_ANON_KEY", "anon")
 	t.Setenv("EMPLOYEE_PER_TICK", "-4")
 
 	cfg, err := LoadAPIFromEnv()
@@ -67,8 +63,6 @@ func TestLoadAPIFromEnvEmployeePerTickClampsNegative(t *testing.T) {
 
 func TestLoadAPIFromEnvNewStocksPerTickAlias(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
-	t.Setenv("SUPABASE_URL", "https://example.supabase.co")
-	t.Setenv("SUPABASE_ANON_KEY", "anon")
 	t.Setenv("new_stocks_per_tick", "9")
 
 	cfg, err := LoadAPIFromEnv()

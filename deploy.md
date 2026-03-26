@@ -1,18 +1,12 @@
-# Deployment Guide: Supabase + Railway (API + Worker)
+# Deployment Guide: Postgres + Railway (API + Worker)
 
-This project does **not** auto-provision Supabase.  
-Follow this document to set up manually, then deploy to Railway.
+Follow this document to connect your own Postgres server and deploy to Railway.
 
-## 1. Supabase setup (manual)
+## 1. Database setup (manual)
 
-1. Create a new Supabase project.
-2. In `Project Settings -> API`, copy:
-   - `Project URL` -> `SUPABASE_URL`
-   - `anon public key` -> `SUPABASE_ANON_KEY`
-3. In `Project Settings -> Database`, copy:
-   - Connection string -> `DATABASE_URL`
-4. In `Authentication -> Providers`, keep Email enabled.
-5. In `Authentication -> Email`, configure verification policy.
+1. Provision a PostgreSQL instance you control.
+2. Copy the connection string to `DATABASE_URL`.
+3. Keep network/firewall rules open for your API/worker runtime.
 
 ## 2. Apply database migration
 
@@ -32,7 +26,7 @@ Verify tables exist:
 ```sql
 SELECT table_schema, table_name
 FROM information_schema.tables
-WHERE table_schema IN ('users', 'game')
+WHERE table_schema IN ('auth', 'users', 'game')
 ORDER BY table_schema, table_name;
 ```
 
@@ -54,8 +48,6 @@ Both services use the same repo and env vars.
 
 ```bash
 DATABASE_URL=postgres://...
-SUPABASE_URL=https://<project>.supabase.co
-SUPABASE_ANON_KEY=<anon-key>
 STANKS_API_ADDR=:8080
 STANKS_MARKET_TICK_EVERY=5m
 STANKS_INTEREST_APR=0.18
@@ -74,8 +66,6 @@ STANKS_STARTUP_SEED_STOCKS=true
 
 ```bash
 DATABASE_URL=postgres://...
-SUPABASE_URL=https://<project>.supabase.co
-SUPABASE_ANON_KEY=<anon-key>
 STANKS_MARKET_TICK_EVERY=5m
 STANKS_INTEREST_APR=0.18
 STANKS_STARTUP_SEED_STOCKS=true
@@ -105,8 +95,6 @@ Then run service on a Railway cron (every 5 minutes) instead of always-on.
 Set these as Railway Variables (never commit secrets):
 
 - `DATABASE_URL`
-- `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
 
 Optional tuning:
 
@@ -152,15 +140,14 @@ stk dash
 
 ## 10. Common failure modes
 
-- `401 invalid token`: wrong Supabase URL/key or expired token.
+- `401 invalid token`: bearer token missing/invalid/expired in `auth.users`.
 - `db connect failed`: invalid `DATABASE_URL` or network restrictions.
 - Missing tables: migration not applied.
 - Orders failing with idempotency conflict: duplicate request key replayed.
 
 ## 11. Minimal production hardening checklist
 
-- Enable Supabase auth email verification rules intentionally.
-- Enforce strong passwords in auth policy.
+- Enforce strong password policy at signup.
 - Add Railway alerting on API/worker failures.
 - Add log drains and metrics/trace backend.
 - Restrict who can change Railway variables.

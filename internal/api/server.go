@@ -34,12 +34,12 @@ type UserContext struct {
 type Server struct {
 	cfg  config.APIConfig
 	log  *slog.Logger
-	auth *auth.SupabaseClient
+	auth *auth.Client
 	game *game.Service
 	mux  *chi.Mux
 }
 
-func New(cfg config.APIConfig, logger *slog.Logger, authClient *auth.SupabaseClient, gameSvc *game.Service) *Server {
+func New(cfg config.APIConfig, logger *slog.Logger, authClient *auth.Client, gameSvc *game.Service) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}

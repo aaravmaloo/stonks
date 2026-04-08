@@ -47,6 +47,7 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 	}
 
 	commands := []*discordgo.ApplicationCommand{
+		{Name: "setup", Description: "Show the Stanks intro and how to start playing"},
 		{Name: "signup", Description: "Create your Stanks account"},
 		{Name: "login", Description: "Log into your Stanks account"},
 		{Name: "logout", Description: "Disconnect your Discord from Stanks"},

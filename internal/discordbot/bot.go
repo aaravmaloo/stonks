@@ -145,6 +145,8 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 
 	var err error
 	switch data.Name {
+	case "setup":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleSetup(ctx, s, i) })
 	case "signup":
 		err = b.openAuthModal(s, i, signupModalID, "Create Stanks Account", true)
 	case "login":
@@ -246,6 +248,8 @@ func (b *Bot) handleComponent(s *discordgo.Session, i *discordgo.InteractionCrea
 
 	var err error
 	switch parts[0] {
+	case "setup":
+		err = b.handleSetupButton(ctx, s, i, parts)
 	case "nav":
 		err = b.handleNavButton(ctx, s, i, parts)
 	case "refresh":

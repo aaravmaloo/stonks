@@ -115,6 +115,21 @@ func dashboardButtons() discordgo.ActionsRow {
 	)
 }
 
+func setupButtons() []discordgo.MessageComponent {
+	return []discordgo.MessageComponent{
+		actionRow(
+			primaryButton("How To Start", customID("setup", "start")),
+			primaryButton("Command Guide", customID("setup", "commands")),
+			primaryButton("Game Loop", customID("setup", "loop")),
+		),
+		actionRow(
+			secondaryButton("Browse Stocks", customID("nav", "stocks")),
+			secondaryButton("Browse Funds", customID("nav", "funds")),
+			secondaryButton("Intro", customID("setup", "intro")),
+		),
+	}
+}
+
 func confirmCancelRow(confirmID, cancelID string) discordgo.ActionsRow {
 	return actionRow(
 		successButton("Confirm", confirmID),

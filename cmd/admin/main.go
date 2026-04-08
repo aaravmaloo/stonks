@@ -21,11 +21,6 @@ type adminStore struct {
 	db *pgxpool.Pool
 }
 
-type adminSession struct {
-	Username string    `json:"username"`
-	LoginAt  time.Time `json:"login_at"`
-}
-
 type playerRow struct {
 	UserID             string
 	Email              string
@@ -62,7 +57,7 @@ type stockRow struct {
 var stdinReader = bufio.NewReader(os.Stdin)
 
 func main() {
-	_ = config.LoadDotEnvIfPresent(".env")
+	loadAdminEnv()
 
 	cfg, err := config.LoadAPIFromEnv()
 	if err != nil {
@@ -87,18 +82,11 @@ func main() {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			switch cmd.Name() {
-			case "login", "logout", "status", "help", "completion":
-				return nil
-			}
-			return requireAdminLogin()
+			return requireAdminAccess()
 		},
 	}
 
 	root.AddCommand(
-		newLoginCmd(),
-		newLogoutCmd(),
-		newStatusCmd(),
 		newPlayersCmd(store),
 		newShowCmd(store),
 		newChangeBalanceCmd(store),
@@ -123,70 +111,6 @@ func main() {
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
-	}
-}
-
-func newLoginCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "login",
-		Short: "Log into the admin CLI using ADMIN_USRN and ADMIN_PASS from env",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			wantUser := strings.TrimSpace(os.Getenv("ADMIN_USRN"))
-			wantPass := strings.TrimSpace(os.Getenv("ADMIN_PASS"))
-			if wantUser == "" || wantPass == "" {
-				return fmt.Errorf("ADMIN_USRN and ADMIN_PASS must be set")
-			}
-
-			username, err := promptRequired("Admin username")
-			if err != nil {
-				return err
-			}
-			password, err := promptPassword("Admin password")
-			if err != nil {
-				return err
-			}
-			if username != wantUser || password != wantPass {
-				return fmt.Errorf("invalid admin credentials")
-			}
-			if err := saveAdminSession(adminSession{
-				Username: username,
-				LoginAt:  time.Now().UTC(),
-			}); err != nil {
-				return err
-			}
-			fmt.Printf("Admin login successful as %s\n", username)
-			return nil
-		},
-	}
-}
-
-func newLogoutCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "logout",
-		Short: "Clear the local admin session",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := clearAdminSession(); err != nil {
-				return err
-			}
-			fmt.Println("Admin session cleared.")
-			return nil
-		},
-	}
-}
-
-func newStatusCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "status",
-		Short: "Show current admin login status",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			sess, err := loadAdminSession()
-			if err != nil {
-				fmt.Println("Not logged in.")
-				return nil
-			}
-			fmt.Printf("Logged in as %s at %s\n", sess.Username, sess.LoginAt.Local().Format("2006-01-02 15:04:05"))
-			return nil
-		},
 	}
 }
 

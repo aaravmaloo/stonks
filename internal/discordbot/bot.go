@@ -291,9 +291,13 @@ func (b *Bot) handleNavButton(ctx context.Context, s *discordgo.Session, i *disc
 	case "portfolio":
 		return b.handlePortfolio(ctx, s, i)
 	case "stocks":
-		raw, err := b.client.ListStocks(ctx, "", false)
+		token, _, err := b.requireSession(ctx, s, i)
 		if err != nil {
-			return b.respondError(s, i, trimAPIError(err))
+			return err
+		}
+		raw, err := b.client.ListStocks(ctx, token, false)
+		if err != nil {
+			return b.respondAuthAwareError(ctx, s, i, err)
 		}
 		out, err := decodeInto[stocksPayload](raw)
 		if err != nil {
@@ -494,13 +498,17 @@ func (b *Bot) handlePageButton(ctx context.Context, s *discordgo.Session, i *dis
 
 	switch namespace {
 	case "stocks":
+		token, _, err := b.requireSession(ctx, s, i)
+		if err != nil {
+			return err
+		}
 		all := false
 		if len(parts) >= 4 {
 			all = parts[3] == "true"
 		}
-		raw, err := b.client.ListStocks(ctx, "", all)
+		raw, err := b.client.ListStocks(ctx, token, all)
 		if err != nil {
-			return b.respondError(s, i, trimAPIError(err))
+			return b.respondAuthAwareError(ctx, s, i, err)
 		}
 		out, err := decodeInto[stocksPayload](raw)
 		if err != nil {

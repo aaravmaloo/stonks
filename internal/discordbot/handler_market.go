@@ -135,10 +135,14 @@ func (b *Bot) handlePortfolio(ctx context.Context, s *discordgo.Session, i *disc
 }
 
 func (b *Bot) handleStocks(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	all := boolOption(i.ApplicationCommandData().Options, "all")
-	raw, err := b.client.ListStocks(ctx, "", all)
+	token, _, err := b.requireSession(ctx, s, i)
 	if err != nil {
-		return b.respondError(s, i, trimAPIError(err))
+		return err
+	}
+	all := boolOption(i.ApplicationCommandData().Options, "all")
+	raw, err := b.client.ListStocks(ctx, token, all)
+	if err != nil {
+		return b.respondAuthAwareError(ctx, s, i, err)
 	}
 	out, err := decodeInto[stocksPayload](raw)
 	if err != nil {
@@ -187,10 +191,14 @@ func (b *Bot) renderStockPage(s *discordgo.Session, i *discordgo.InteractionCrea
 }
 
 func (b *Bot) handleStock(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	symbol := strings.ToUpper(strings.TrimSpace(stringOption(i.ApplicationCommandData().Options, "symbol", "")))
-	raw, err := b.client.StockDetail(ctx, "", symbol)
+	token, _, err := b.requireSession(ctx, s, i)
 	if err != nil {
-		return b.respondError(s, i, trimAPIError(err))
+		return err
+	}
+	symbol := strings.ToUpper(strings.TrimSpace(stringOption(i.ApplicationCommandData().Options, "symbol", "")))
+	raw, err := b.client.StockDetail(ctx, token, symbol)
+	if err != nil {
+		return b.respondAuthAwareError(ctx, s, i, err)
 	}
 	out, err := decodeInto[game.StockDetail](raw)
 	if err != nil {
@@ -259,9 +267,13 @@ func (b *Bot) handleOrder(ctx context.Context, s *discordgo.Session, i *discordg
 }
 
 func (b *Bot) handleFunds(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	raw, err := b.client.ListFunds(ctx, "")
+	token, _, err := b.requireSession(ctx, s, i)
 	if err != nil {
-		return b.respondError(s, i, trimAPIError(err))
+		return err
+	}
+	raw, err := b.client.ListFunds(ctx, token)
+	if err != nil {
+		return b.respondAuthAwareError(ctx, s, i, err)
 	}
 
 	funds, ok := raw["funds"]

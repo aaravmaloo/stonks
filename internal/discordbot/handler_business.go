@@ -49,28 +49,30 @@ func (b *Bot) handleBusiness(ctx context.Context, s *discordgo.Session, i *disco
 		return err
 	}
 
-	eb := NewEmbed().Title(fmt.Sprintf("Business #%d", out.ID)).Color(colorBusiness).
-		Desc(out.Name).
-		Field("Employees", fmt.Sprintf("%d / %d", out.EmployeeCount, out.EmployeeLimit), true).
-		Field("Revenue/Tick", fmtStonky(out.RevenuePerTickMicros), true).
-		Field("Operating Costs", fmtStonky(out.OperatingCostsMicros), true).
-		Field("Strategy", out.Strategy, true).
-		Field("Brand", progressBar(out.BrandBps, 10000, 10), true).
-		Field("Health", progressBar(out.OperationalHealthBps, 10000, 10), true).
-		Field("Marketing", upgradeBar(out.MarketingLevel, 10), true).
-		Field("R&D", upgradeBar(out.RDLevel, 10), true).
-		Field("Automation", upgradeBar(out.AutomationLevel, 10), true).
-		Field("Compliance", upgradeBar(out.ComplianceLevel, 10), true).
-		Field("Cash Reserve", fmtStonky(out.CashReserveMicros), true).
-		Field("Loans Outstanding", fmtStonky(out.LoanOutstandingMicros), true)
-
+	lines := []string{
+		fmt.Sprintf("Name:        %s", out.Name),
+		fmt.Sprintf("Visibility:  %s", out.Visibility),
+		fmt.Sprintf("Listed:      %t", out.IsListed),
+		fmt.Sprintf("Strategy:    %s", out.Strategy),
+		fmt.Sprintf("Employees:   %d / %d", out.EmployeeCount, out.EmployeeLimit),
+		fmt.Sprintf("Machinery:   %d", out.MachineryCount),
+		fmt.Sprintf("Upgrades:    mkt=%d rd=%d auto=%d comp=%d", out.MarketingLevel, out.RDLevel, out.AutomationLevel, out.ComplianceLevel),
+		fmt.Sprintf("Brand:       %.2f%%", float64(out.BrandBps)/100),
+		fmt.Sprintf("Op Health:   %.2f%%", float64(out.OperationalHealthBps)/100),
+		fmt.Sprintf("Reserve:     %s stonky", fmtMicrosExact(out.CashReserveMicros)),
+		fmt.Sprintf("Revenue/tick:%s stonky", fmtMicrosExact(out.RevenuePerTickMicros)),
+		fmt.Sprintf("Mach output: %s stonky", fmtMicrosExact(out.MachineryOutputMicros)),
+		fmt.Sprintf("Mach upkeep: %s stonky", fmtMicrosExact(out.MachineryUpkeepMicros)),
+		fmt.Sprintf("Loan debt:   %s stonky", fmtMicrosExact(out.LoanOutstandingMicros)),
+	}
 	if strings.TrimSpace(out.StockSymbol) != "" {
-		eb.Field("Stock", strings.TrimSpace(out.StockSymbol), true)
+		lines = append(lines, fmt.Sprintf("Stock:       %s", strings.TrimSpace(out.StockSymbol)))
 	}
 	if strings.TrimSpace(out.LastEvent) != "" {
-		eb.Field("Last Event", out.LastEvent, false)
+		lines = append(lines, fmt.Sprintf("Last event:  %s", out.LastEvent))
 	}
 
+	eb := NewEmbed().Title(fmt.Sprintf("Business #%d", out.ID)).Color(colorBusiness).Desc(codeBlock(lines...))
 	return b.respondEmbedWithComponents(s, i, eb.Build(), []discordgo.MessageComponent{businessActionButtons(out.ID)})
 }
 
@@ -105,14 +107,16 @@ func (b *Bot) renderCandidatePage(s *discordgo.Session, i *discordgo.Interaction
 		end = len(candidates)
 	}
 
-	lines := make([]string, 0, end-start)
+	lines := []string{
+		fmt.Sprintf("%-4s %-18s %-10s %-12s %12s %12s %8s", "ID", "NAME", "ROLE", "TRAIT", "HIRE COST", "REV/TICK", "RISK"),
+	}
 	for _, c := range candidates[start:end] {
-		lines = append(lines, fmt.Sprintf("`#%d` **%s** | %s | cost %s | rev %s | risk %.2f%%",
-			c.ID, c.FullName, c.Role, fmtStonky(c.HireCostMicros), fmtStonky(c.RevenuePerTickMicros), float64(c.RiskBps)/100))
+		lines = append(lines, fmt.Sprintf("%-4d %-18s %-10s %-12s %12s %12s %7.2f%%",
+			c.ID, truncateText(c.FullName, 18), truncateText(c.Role, 10), truncateText(c.Trait, 12), fmtMicrosExact(c.HireCostMicros), fmtMicrosExact(c.RevenuePerTickMicros), float64(c.RiskBps)/100))
 	}
 
 	eb := NewEmbed().Title("Candidates").Color(colorBusiness).
-		Desc(strings.Join(lines, "\n")).
+		Desc(codeBlock(lines...)).
 		Field("Shown", strconv.Itoa(end-start), true).
 		Field("Total", strconv.Itoa(len(candidates)), true)
 
@@ -156,14 +160,16 @@ func (b *Bot) renderEmployeePage(s *discordgo.Session, i *discordgo.InteractionC
 		end = len(employees)
 	}
 
-	lines := make([]string, 0, end-start)
+	lines := []string{
+		fmt.Sprintf("%-4s %-18s %-10s %-12s %12s %8s %-16s", "ID", "NAME", "ROLE", "TRAIT", "REV/TICK", "RISK", "HIRED"),
+	}
 	for _, e := range employees[start:end] {
-		lines = append(lines, fmt.Sprintf("`#%d` **%s** | %s | rev %s | risk %.2f%%",
-			e.ID, e.FullName, e.Role, fmtStonky(e.RevenuePerTickMicros), float64(e.RiskBps)/100))
+		lines = append(lines, fmt.Sprintf("%-4d %-18s %-10s %-12s %12s %7.2f%% %-16s",
+			e.ID, truncateText(e.FullName, 18), truncateText(e.Role, 10), truncateText(e.Trait, 12), fmtMicrosExact(e.RevenuePerTickMicros), float64(e.RiskBps)/100, e.CreatedAt.Local().Format("2006-01-02 15:04")))
 	}
 
 	eb := NewEmbed().Title("Employees").Color(colorBusiness).
-		Desc(strings.Join(lines, "\n")).
+		Desc(codeBlock(lines...)).
 		Field("Business ID", strconv.FormatInt(businessID, 10), true).
 		Field("Total", strconv.Itoa(len(employees)), true)
 
@@ -246,13 +252,15 @@ func (b *Bot) handleMachinery(ctx context.Context, s *discordgo.Session, i *disc
 		return b.respondEmbed(s, i, infoEmbed("Machinery", fmt.Sprintf("Business `%d` has no machinery.", businessID), nil))
 	}
 
-	lines := make([]string, 0, len(items))
+	lines := []string{
+		fmt.Sprintf("%-16s %12s %12s", "TYPE", "OUTPUT", "UPKEEP"),
+	}
 	for _, item := range items {
 		m, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("`%s` | output %s | upkeep %s",
+		lines = append(lines, fmt.Sprintf("%-16s %12s %12s",
 			fmt.Sprint(m["machine_type"]),
 			formatMaybeMicros(m["output_micros"]),
 			formatMaybeMicros(m["upkeep_micros"]),
@@ -260,7 +268,7 @@ func (b *Bot) handleMachinery(ctx context.Context, s *discordgo.Session, i *disc
 	}
 
 	eb := NewEmbed().Title("Machinery").Color(colorBusiness).
-		Desc(strings.Join(lines, "\n")).
+		Desc(codeBlock(lines...)).
 		Field("Business ID", strconv.FormatInt(businessID, 10), true).
 		Field("Count", strconv.Itoa(len(items)), true)
 
@@ -319,19 +327,21 @@ func (b *Bot) handleLoans(ctx context.Context, s *discordgo.Session, i *discordg
 		if !ok || len(items) == 0 {
 			return b.respondEmbed(s, i, infoEmbed("Loans", fmt.Sprintf("Business `%d` has no outstanding loans.", businessID), nil))
 		}
-		lines := make([]string, 0, len(items))
+		lines := []string{
+			fmt.Sprintf("%-12s %12s", "OUTSTAND", "DUE"),
+		}
 		for _, item := range items {
 			m, ok := item.(map[string]any)
 			if !ok {
 				continue
 			}
-			lines = append(lines, fmt.Sprintf("Outstanding: %s | Due: %s",
+			lines = append(lines, fmt.Sprintf("%-12s %12s",
 				formatMaybeMicros(m["outstanding_micros"]),
 				formatMaybeMicros(m["due_amount_micros"]),
 			))
 		}
 		eb := NewEmbed().Title("Loans").Color(colorBusiness).
-			Desc(strings.Join(lines, "\n")).
+			Desc(codeBlock(lines...)).
 			Field("Business ID", strconv.FormatInt(businessID, 10), true)
 		return b.respondEmbed(s, i, eb.Build())
 	}

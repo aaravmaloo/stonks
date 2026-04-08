@@ -26,41 +26,60 @@ func (b *Bot) handleDashboard(ctx context.Context, s *discordgo.Session, i *disc
 		return err
 	}
 
-	eb := NewEmbed().Title("Dashboard").Color(colorInfo).
-		Field("Balance", fmtStonky(out.BalanceMicros), true).
-		Field("Net Worth", fmtStonky(out.NetWorthMicros), true).
-		Field("Peak", fmtStonky(out.PeakNetWorthMicros), true)
+	startingPL := out.NetWorthMicros - game.StarterBalanceMicros
+	openPL := int64(0)
+	for _, pos := range out.Positions {
+		openPL += pos.UnrealizedMicros
+	}
+	downFromPeak := out.NetWorthMicros - out.PeakNetWorthMicros
 
-	if out.ActiveBusinessID != nil {
-		eb.Field("Active Business", strconv.FormatInt(*out.ActiveBusinessID, 10), true)
+	sections := []string{
+		codeBlock(
+			fmt.Sprintf("Balance:            %s stonky", fmtMicrosExact(out.BalanceMicros)),
+			fmt.Sprintf("Net Worth:          %s stonky", fmtMicrosExact(out.NetWorthMicros)),
+			fmt.Sprintf("Peak Net Worth:     %s stonky", fmtMicrosExact(out.PeakNetWorthMicros)),
+			fmt.Sprintf("P/L vs Start:       %s stonky", signedMicrosExact(startingPL)),
+			fmt.Sprintf("Open Position P/L:  %s stonky", signedMicrosExact(openPL)),
+			fmt.Sprintf("From Peak:          %s stonky", signedMicrosExact(downFromPeak)),
+		),
 	}
 
-	if len(out.Positions) > 0 {
-		lines := make([]string, 0, min(len(out.Positions), 5))
-		for idx, pos := range out.Positions {
-			if idx >= 5 {
-				break
-			}
-			lines = append(lines, fmt.Sprintf("`%s` %s | %s", strings.TrimSpace(pos.Symbol), fmtShares(pos.QuantityUnits), fmtPL(pos.UnrealizedMicros)))
+	if len(out.Positions) == 0 {
+		sections = append(sections, "**Positions**\nNo open positions yet.")
+	} else {
+		lines := []string{
+			fmt.Sprintf("%-8s %-12s %-12s %-12s", "SYMBOL", "QTY", "NOW", "P/L"),
 		}
-		eb.Field("Positions", strings.Join(lines, "\n"), false)
-	}
-
-	if len(out.Businesses) > 0 {
-		lines := make([]string, 0, min(len(out.Businesses), 5))
-		for idx, biz := range out.Businesses {
-			if idx >= 5 {
-				break
-			}
-			lines = append(lines, fmt.Sprintf("`#%d` **%s** | rev/tick %s | %d/%d staff", biz.ID, biz.Name, fmtStonky(biz.RevenuePerTickMicros), biz.EmployeeCount, biz.EmployeeLimit))
+		for _, pos := range out.Positions {
+			lines = append(lines, fmt.Sprintf("%-8s %-12.4f %-12s %-12s",
+				strings.TrimSpace(pos.Symbol),
+				game.UnitsToShares(pos.QuantityUnits),
+				fmtMicrosExact(pos.CurrentPriceMicros),
+				signedMicrosExact(pos.UnrealizedMicros),
+			))
 		}
-		eb.Field("Businesses", strings.Join(lines, "\n"), false)
+		sections = append(sections, "**Positions**\n"+codeBlock(lines...))
 	}
 
-	if len(out.Businesses) == 0 && len(out.Positions) == 0 {
-		eb.Desc("No positions or businesses yet. Use `/stocks` to browse the market.")
+	if len(out.Businesses) == 0 {
+		sections = append(sections, "**Businesses**\nNo businesses yet.")
+	} else {
+		lines := []string{
+			fmt.Sprintf("%-4s %-18s %-10s %-10s %-10s", "ID", "NAME", "EMP/CAP", "REV/TICK", "RESERVE"),
+		}
+		for _, biz := range out.Businesses {
+			lines = append(lines, fmt.Sprintf("%-4d %-18s %-10s %-10s %-10s",
+				biz.ID,
+				truncateText(biz.Name, 18),
+				fmt.Sprintf("%d/%d", biz.EmployeeCount, biz.EmployeeLimit),
+				fmtMicrosExact(biz.RevenuePerTickMicros),
+				fmtMicrosExact(biz.CashReserveMicros),
+			))
+		}
+		sections = append(sections, "**Businesses**\n"+codeBlock(lines...))
 	}
 
+	eb := NewEmbed().Title(fmt.Sprintf("Dashboard | Season %d", out.SeasonID)).Color(colorInfo).Desc(strings.Join(sections, "\n\n"))
 	return b.respondEmbedWithComponents(s, i, eb.Build(), []discordgo.MessageComponent{dashboardButtons()})
 }
 
@@ -77,14 +96,15 @@ func (b *Bot) handleWallet(ctx context.Context, s *discordgo.Session, i *discord
 	if err != nil {
 		return err
 	}
-	eb := NewEmbed().Title("Wallet").Color(colorInfo).Desc("Current account balance and progression.").
-		Field("Email", email, true).
-		Field("Balance", fmtStonky(out.BalanceMicros), true).
-		Field("Peak Net Worth", fmtStonky(out.PeakNetWorthMicros), true)
-
-	if out.ActiveBusinessID != nil {
-		eb.Field("Active Business", strconv.FormatInt(*out.ActiveBusinessID, 10), true)
+	lines := []string{
+		fmt.Sprintf("Email:              %s", email),
+		fmt.Sprintf("Balance:            %s stonky", fmtMicrosExact(out.BalanceMicros)),
+		fmt.Sprintf("Peak Net Worth:     %s stonky", fmtMicrosExact(out.PeakNetWorthMicros)),
 	}
+	if out.ActiveBusinessID != nil {
+		lines = append(lines, fmt.Sprintf("Active Business:    %d", *out.ActiveBusinessID))
+	}
+	eb := NewEmbed().Title("Wallet").Color(colorInfo).Desc(codeBlock(lines...))
 	return b.respondEmbed(s, i, eb.Build())
 }
 
@@ -106,15 +126,18 @@ func (b *Bot) handlePortfolio(ctx context.Context, s *discordgo.Session, i *disc
 		return b.respondEmbed(s, i, infoEmbed("Portfolio", "You have no stock positions. Use `/order` to buy shares.", nil))
 	}
 
-	lines := make([]string, 0, len(out.Positions))
+	lines := []string{
+		fmt.Sprintf("%-8s %-22s %10s %12s %12s", "SYMBOL", "NAME", "QTY", "NOW", "P/L"),
+	}
 	var totalPL int64
 	for _, pos := range out.Positions {
 		totalPL += pos.UnrealizedMicros
-		lines = append(lines, fmt.Sprintf("`%s` %s shares @ %s | P/L: %s",
+		lines = append(lines, fmt.Sprintf("%-8s %-22s %10.4f %12s %12s",
 			strings.TrimSpace(pos.Symbol),
-			fmtShares(pos.QuantityUnits),
-			fmtStonky(pos.AvgPriceMicros),
-			fmtPL(pos.UnrealizedMicros),
+			truncateText(pos.DisplayName, 22),
+			game.UnitsToShares(pos.QuantityUnits),
+			fmtMicrosExact(pos.CurrentPriceMicros),
+			signedMicrosExact(pos.UnrealizedMicros),
 		))
 	}
 
@@ -126,10 +149,10 @@ func (b *Bot) handlePortfolio(ctx context.Context, s *discordgo.Session, i *disc
 	}
 
 	eb := NewEmbed().Title("Portfolio").Color(color).
-		Desc(strings.Join(lines, "\n")).
-		Field("Total P/L", fmtPL(totalPL), true).
+		Desc(codeBlock(lines...)).
+		Field("Total P/L", signedMicrosExact(totalPL)+" stonky", true).
 		Field("Positions", strconv.Itoa(len(out.Positions)), true).
-		Field("Balance", fmtStonky(out.BalanceMicros), true)
+		Field("Balance", fmtMicrosExact(out.BalanceMicros)+" stonky", true)
 
 	return b.respondEmbed(s, i, eb.Build())
 }
@@ -170,17 +193,24 @@ func (b *Bot) renderStockPage(s *discordgo.Session, i *discordgo.InteractionCrea
 		end = len(stocks)
 	}
 
-	lines := make([]string, 0, end-start)
+	lines := []string{
+		fmt.Sprintf("%-8s %-24s %12s %-8s", "SYMBOL", "NAME", "PRICE", "LISTED"),
+	}
 	for _, stock := range stocks[start:end] {
-		status := "private"
+		status := "no"
 		if stock.ListedPublic {
-			status = "public"
+			status = "yes"
 		}
-		lines = append(lines, fmt.Sprintf("`%s` **%s** | %s | %s", strings.TrimSpace(stock.Symbol), stock.DisplayName, fmtStonky(stock.CurrentPriceMicros), status))
+		lines = append(lines, fmt.Sprintf("%-8s %-24s %12s %-8s",
+			strings.TrimSpace(stock.Symbol),
+			truncateText(stock.DisplayName, 24),
+			fmtMicrosExact(stock.CurrentPriceMicros),
+			status,
+		))
 	}
 
 	eb := NewEmbed().Title("Stock Market").Color(colorMarket).
-		Desc(strings.Join(lines, "\n")).
+		Desc(codeBlock(lines...)).
 		Field("Total", strconv.Itoa(len(stocks)), true).
 		Field("Mode", ternary(all, "all", "public only"), true)
 
@@ -205,30 +235,31 @@ func (b *Bot) handleStock(ctx context.Context, s *discordgo.Session, i *discordg
 		return err
 	}
 
-	desc := fmt.Sprintf("**%s**\nCurrent price: %s", out.DisplayName, fmtStonky(out.CurrentPriceMicros))
+	header := []string{
+		fmt.Sprintf("Current Price: %s stonky", fmtMicrosExact(out.CurrentPriceMicros)),
+		fmt.Sprintf("Listed Public: %t", out.ListedPublic),
+	}
 
 	if len(out.Series) > 0 {
 		prices := make([]int64, len(out.Series))
 		for idx, p := range out.Series {
 			prices[idx] = p.PriceMicros
 		}
-		desc += "\n\nPrice trend: `" + sparkline(prices) + "`"
+		header = append(header, "Trend (recent): "+sparkline(prices))
 
 		recent := out.Series
 		if len(recent) > 5 {
 			recent = recent[len(recent)-5:]
 		}
-		points := make([]string, 0, len(recent))
+		points := []string{fmt.Sprintf("%-20s %12s", "TIME", "PRICE")}
 		for _, point := range recent {
-			points = append(points, fmt.Sprintf("%s %s", point.TickAt.UTC().Format("Jan 02 15:04"), fmtStonky(point.PriceMicros)))
+			points = append(points, fmt.Sprintf("%-20s %12s", point.TickAt.Local().Format("2006-01-02 15:04"), fmtMicrosExact(point.PriceMicros)))
 		}
-		desc += "\n\n" + strings.Join(points, "\n")
+		header = append(header, "", "Recent Ticks", codeBlock(points...))
 	}
 
-	eb := NewEmbed().Title("Stock | "+strings.TrimSpace(out.Symbol)).Color(colorMarket).
-		Desc(desc).
-		Field("Symbol", strings.TrimSpace(out.Symbol), true).
-		Field("Listed", ternary(out.ListedPublic, "yes", "no"), true)
+	eb := NewEmbed().Title("Stock | " + strings.TrimSpace(out.Symbol)).Color(colorMarket).
+		Desc("**" + out.DisplayName + "**\n\n" + strings.Join(header, "\n"))
 
 	return b.respondEmbedWithComponents(s, i, eb.Build(), []discordgo.MessageComponent{stockActionButtons(strings.TrimSpace(out.Symbol))})
 }
@@ -286,7 +317,9 @@ func (b *Bot) handleFunds(ctx context.Context, s *discordgo.Session, i *discordg
 		return b.respondEmbed(s, i, infoEmbed("Mutual Funds", "No funds available right now.", nil))
 	}
 
-	lines := make([]string, 0, len(items))
+	lines := []string{
+		fmt.Sprintf("%-8s %12s %-40s", "CODE", "NAV", "COMPONENTS"),
+	}
 	for _, item := range items {
 		m, ok := item.(map[string]any)
 		if !ok {
@@ -298,11 +331,11 @@ func (b *Bot) handleFunds(ctx context.Context, s *discordgo.Session, i *discordg
 		if nav, ok := toInt64(m["nav_micros"]); ok {
 			navStr = fmtStonky(nav)
 		}
-		lines = append(lines, fmt.Sprintf("`%s` **%s** | NAV: %s", code, name, navStr))
+		lines = append(lines, fmt.Sprintf("%-8s %12s %-40s", code, navStr, truncateText(name, 40)))
 	}
 
 	eb := NewEmbed().Title("Mutual Funds").Color(colorInfo).
-		Desc(strings.Join(lines, "\n")).
+		Desc(codeBlock(lines...)).
 		Field("Total Funds", strconv.Itoa(len(items)), true)
 
 	return b.respondEmbed(s, i, eb.Build())
@@ -373,21 +406,20 @@ func (b *Bot) handleLeaderboard(ctx context.Context, s *discordgo.Session, i *di
 		return b.respondEmbed(s, i, leaderboardEmbed(strings.Title(scope)+" Leaderboard", "No leaderboard data yet.", nil))
 	}
 
-	lines := make([]string, 0, min(len(out.Rows), 15))
+	lines := []string{
+		fmt.Sprintf("%-6s %-18s %-12s %14s", "RANK", "PLAYER", "INVITE", "NET WORTH"),
+	}
 	for idx, row := range out.Rows {
 		if idx >= 15 {
 			break
 		}
-		medal := ""
-		if row.Rank == 1 {
-			medal = " [1st]"
-		} else if row.Rank == 2 {
-			medal = " [2nd]"
-		} else if row.Rank == 3 {
-			medal = " [3rd]"
-		}
-		lines = append(lines, fmt.Sprintf("`#%d` **%s**%s | %s", row.Rank, row.Username, medal, fmtStonky(row.NetWorthMicros)))
+		lines = append(lines, fmt.Sprintf("%-6d %-18s %-12s %14s",
+			row.Rank,
+			truncateText(row.Username, 18),
+			truncateText(row.InviteCode, 12),
+			fmtMicrosExact(row.NetWorthMicros),
+		))
 	}
 
-	return b.respondEmbed(s, i, leaderboardEmbed(strings.Title(scope)+" Leaderboard", strings.Join(lines, "\n"), nil))
+	return b.respondEmbed(s, i, leaderboardEmbed(strings.Title(scope)+" Leaderboard", codeBlock(lines...), nil))
 }

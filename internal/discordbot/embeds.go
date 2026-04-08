@@ -3,6 +3,7 @@ package discordbot
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -109,6 +110,24 @@ func fmtStonky(micros int64) string {
 	return fmt.Sprintf("%.2f stonky", v)
 }
 
+func fmtMicrosExact(v int64) string {
+	sign := ""
+	if v < 0 {
+		sign = "-"
+		v = -v
+	}
+	whole := v / game.MicrosPerStonky
+	frac := (v % game.MicrosPerStonky) / 10_000
+	return fmt.Sprintf("%s%s.%02d", sign, comma(whole), frac)
+}
+
+func signedMicrosExact(v int64) string {
+	if v > 0 {
+		return "+" + fmtMicrosExact(v)
+	}
+	return fmtMicrosExact(v)
+}
+
 func fmtShares(units int64) string {
 	return fmt.Sprintf("%.4f", game.UnitsToShares(units))
 }
@@ -178,6 +197,43 @@ func progressBar(current, max int32, width int) string {
 	filled := int(math.Round(ratio * float64(width)))
 	empty := width - filled
 	return strings.Repeat("█", filled) + strings.Repeat("░", empty) + fmt.Sprintf(" %.0f%%", ratio*100)
+}
+
+func comma(v int64) string {
+	s := strconv.FormatInt(v, 10)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	pre := len(s) % 3
+	if pre > 0 {
+		b.WriteString(s[:pre])
+		if len(s) > pre {
+			b.WriteByte(',')
+		}
+	}
+	for i := pre; i < len(s); i += 3 {
+		b.WriteString(s[i : i+3])
+		if i+3 < len(s) {
+			b.WriteByte(',')
+		}
+	}
+	return b.String()
+}
+
+func truncateText(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if n <= 0 || len(s) <= n {
+		return s
+	}
+	if n <= 3 {
+		return s[:n]
+	}
+	return s[:n-3] + "..."
+}
+
+func codeBlock(lines ...string) string {
+	return "```text\n" + strings.Join(lines, "\n") + "\n```"
 }
 
 func upgradeBar(level int32, maxLevel int32) string {

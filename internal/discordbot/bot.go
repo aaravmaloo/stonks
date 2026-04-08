@@ -15,7 +15,6 @@ import (
 	"stanks/internal/game"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/google/uuid"
 )
 
 var ErrNoSession = errors.New("no discord session found")
@@ -23,10 +22,6 @@ var ErrNoSession = errors.New("no discord session found")
 const (
 	signupModalID = "stanks:signup"
 	loginModalID  = "stanks:login"
-
-	colorPrimary = 0x1F8B4C
-	colorDanger  = 0xD83C3E
-	colorInfo    = 0x2B6CB0
 )
 
 type Bot struct {
@@ -116,110 +111,6 @@ func (b *Bot) Run(ctx context.Context) error {
 	return nil
 }
 
-func commandDefinitions() []*discordgo.ApplicationCommand {
-	scopeChoices := []*discordgo.ApplicationCommandOptionChoice{
-		{Name: "global", Value: "global"},
-		{Name: "friends", Value: "friends"},
-	}
-	sideChoices := []*discordgo.ApplicationCommandOptionChoice{
-		{Name: "buy", Value: "buy"},
-		{Name: "sell", Value: "sell"},
-	}
-	visibilityChoices := []*discordgo.ApplicationCommandOptionChoice{
-		{Name: "private", Value: "private"},
-		{Name: "public", Value: "public"},
-	}
-	hiringChoices := []*discordgo.ApplicationCommandOptionChoice{
-		{Name: "best_value", Value: "best_value"},
-		{Name: "high_output", Value: "high_output"},
-		{Name: "low_risk", Value: "low_risk"},
-	}
-	commands := []*discordgo.ApplicationCommand{
-		{Name: "signup", Description: "Create your Stanks account"},
-		{Name: "login", Description: "Log into your Stanks account"},
-		{Name: "logout", Description: "Disconnect your Discord account from Stanks"},
-		{Name: "dashboard", Description: "Show your Stanks dashboard"},
-		{Name: "wallet", Description: "Show your wallet summary"},
-		{
-			Name:        "stocks",
-			Description: "List tradable stocks",
-			Options: []*discordgo.ApplicationCommandOption{
-				{Type: discordgo.ApplicationCommandOptionBoolean, Name: "all", Description: "Include unlisted stocks"},
-			},
-		},
-		{
-			Name:        "stock",
-			Description: "Show details for a stock symbol",
-			Options: []*discordgo.ApplicationCommandOption{
-				{Type: discordgo.ApplicationCommandOptionString, Name: "symbol", Description: "Stock symbol", Required: true},
-			},
-		},
-		{
-			Name:        "order",
-			Description: "Place a buy or sell order",
-			Options: []*discordgo.ApplicationCommandOption{
-				{Type: discordgo.ApplicationCommandOptionString, Name: "symbol", Description: "Stock symbol", Required: true},
-				{Type: discordgo.ApplicationCommandOptionString, Name: "side", Description: "Buy or sell", Required: true, Choices: sideChoices},
-				{Type: discordgo.ApplicationCommandOptionNumber, Name: "shares", Description: "Share quantity", Required: true},
-			},
-		},
-		{
-			Name:        "business-create",
-			Description: "Create a new business",
-			Options: []*discordgo.ApplicationCommandOption{
-				{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: "Business name", Required: true},
-				{Type: discordgo.ApplicationCommandOptionString, Name: "visibility", Description: "Business visibility", Choices: visibilityChoices},
-			},
-		},
-		{
-			Name:        "business",
-			Description: "Show one business",
-			Options: []*discordgo.ApplicationCommandOption{
-				{Type: discordgo.ApplicationCommandOptionInteger, Name: "business_id", Description: "Business ID", Required: true},
-			},
-		},
-		{Name: "candidates", Description: "Show employee candidates"},
-		{
-			Name:        "employees",
-			Description: "List employees in a business",
-			Options: []*discordgo.ApplicationCommandOption{
-				{Type: discordgo.ApplicationCommandOptionInteger, Name: "business_id", Description: "Business ID", Required: true},
-			},
-		},
-		{
-			Name:        "hire-many",
-			Description: "Hire multiple employees for a business",
-			Options: []*discordgo.ApplicationCommandOption{
-				{Type: discordgo.ApplicationCommandOptionInteger, Name: "business_id", Description: "Business ID", Required: true},
-				{Type: discordgo.ApplicationCommandOptionInteger, Name: "count", Description: "How many employees to hire", Required: true},
-				{Type: discordgo.ApplicationCommandOptionString, Name: "strategy", Description: "Hiring strategy", Choices: hiringChoices},
-			},
-		},
-		{
-			Name:        "leaderboard",
-			Description: "Show the current leaderboard",
-			Options: []*discordgo.ApplicationCommandOption{
-				{Type: discordgo.ApplicationCommandOptionString, Name: "scope", Description: "Global or friends", Choices: scopeChoices},
-			},
-		},
-	}
-	contexts := []discordgo.InteractionContextType{
-		discordgo.InteractionContextGuild,
-		discordgo.InteractionContextBotDM,
-	}
-	integrationTypes := []discordgo.ApplicationIntegrationType{
-		discordgo.ApplicationIntegrationGuildInstall,
-		discordgo.ApplicationIntegrationUserInstall,
-	}
-	for _, cmd := range commands {
-		dmAllowed := true
-		cmd.DMPermission = &dmAllowed
-		cmd.Contexts = &contexts
-		cmd.IntegrationTypes = &integrationTypes
-	}
-	return commands
-}
-
 func (b *Bot) syncCommands() error {
 	appID := b.session.State.User.ID
 	if err := b.syncCommandsForScope(appID, ""); err != nil {
@@ -232,27 +123,8 @@ func (b *Bot) syncCommands() error {
 }
 
 func (b *Bot) syncCommandsForScope(appID, scope string) error {
-	existing, err := b.session.ApplicationCommands(appID, scope)
-	if err != nil {
-		return err
-	}
-	want := make(map[string]struct{}, len(b.commands))
-	for _, cmd := range b.commands {
-		want[cmd.Name] = struct{}{}
-	}
-	for _, cmd := range existing {
-		if _, ok := want[cmd.Name]; ok {
-			if err := b.session.ApplicationCommandDelete(appID, scope, cmd.ID); err != nil {
-				return err
-			}
-		}
-	}
-	for _, cmd := range b.commands {
-		if _, err := b.session.ApplicationCommandCreate(appID, scope, cmd); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := b.session.ApplicationCommandBulkOverwrite(appID, scope, b.commands)
+	return err
 }
 
 func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -261,12 +133,14 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.handleCommand(s, i)
 	case discordgo.InteractionModalSubmit:
 		b.handleModal(s, i)
+	case discordgo.InteractionMessageComponent:
+		b.handleComponent(s, i)
 	}
 }
 
 func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	data := i.ApplicationCommandData()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var err error
@@ -281,12 +155,18 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleDashboard(ctx, s, i) })
 	case "wallet":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleWallet(ctx, s, i) })
+	case "portfolio":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handlePortfolio(ctx, s, i) })
 	case "stocks":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleStocks(ctx, s, i) })
 	case "stock":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleStock(ctx, s, i) })
 	case "order":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleOrder(ctx, s, i) })
+	case "funds":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleFunds(ctx, s, i) })
+	case "fund-order":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleFundOrder(ctx, s, i) })
 	case "business-create":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleBusinessCreate(ctx, s, i) })
 	case "business":
@@ -297,8 +177,24 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleEmployees(ctx, s, i) })
 	case "hire-many":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleHireMany(ctx, s, i) })
+	case "machinery":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleMachinery(ctx, s, i) })
+	case "loans":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleLoans(ctx, s, i) })
+	case "strategy":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleStrategy(ctx, s, i) })
+	case "upgrades":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleUpgrades(ctx, s, i) })
+	case "reserve":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleReserve(ctx, s, i) })
+	case "ipo":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleIPO(ctx, s, i) })
+	case "sell-business":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleSellBusiness(ctx, s, i) })
 	case "leaderboard":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleLeaderboard(ctx, s, i) })
+	case "friends":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleFriends(ctx, s, i) })
 	default:
 		err = b.respondImmediateError(s, i, "Unknown command.")
 	}
@@ -310,7 +206,7 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 
 func (b *Bot) handleModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	data := i.ModalSubmitData()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := b.beginDeferredResponse(s, i); err != nil {
@@ -333,178 +229,94 @@ func (b *Bot) handleModal(s *discordgo.Session, i *discordgo.InteractionCreate) 
 	}
 }
 
-func (b *Bot) openAuthModal(s *discordgo.Session, i *discordgo.InteractionCreate, customID, title string, includeUsername bool) error {
-	components := []discordgo.MessageComponent{
-		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.TextInput{CustomID: "email", Label: "Email", Style: discordgo.TextInputShort, Placeholder: "you@example.com", Required: true},
-		}},
-		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.TextInput{CustomID: "password", Label: "Password", Style: discordgo.TextInputShort, Placeholder: "Strong password", Required: true},
-		}},
-	}
-	if includeUsername {
-		components = append(components, discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.TextInput{CustomID: "username", Label: "Username", Style: discordgo.TextInputShort, Placeholder: "stonkslord", Required: true},
-		}})
-	}
-	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseModal,
-		Data: &discordgo.InteractionResponseData{
-			CustomID:   customID,
-			Title:      title,
-			Components: components,
-		},
-	})
-}
-
-func (b *Bot) handleSignupModal(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, values map[string]string) error {
-	email := strings.TrimSpace(values["email"])
-	password := strings.TrimSpace(values["password"])
-	username := strings.TrimSpace(values["username"])
-
-	session, err := b.client.Signup(ctx, email, password, username)
-	if err != nil {
-		return b.respondError(s, i, trimAPIError(err))
-	}
-	userID, err := interactionUserID(i)
-	if err != nil {
-		return err
-	}
-	if err := b.store.SaveSession(ctx, userID, session.User.Email, session.AccessToken); err != nil {
-		return err
-	}
-	return b.respondEmbed(s, i, successEmbed("Account Ready", "Your Stanks account is live and linked to this Discord user.", []*discordgo.MessageEmbedField{
-		{Name: "Email", Value: session.User.Email, Inline: true},
-		{Name: "Username", Value: username, Inline: true},
-	}))
-}
-
-func (b *Bot) handleLoginModal(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, values map[string]string) error {
-	email := strings.TrimSpace(values["email"])
-	password := strings.TrimSpace(values["password"])
-
-	session, err := b.client.Login(ctx, email, password)
-	if err != nil {
-		return b.respondError(s, i, trimAPIError(err))
-	}
-	userID, err := interactionUserID(i)
-	if err != nil {
-		return err
-	}
-	if err := b.store.SaveSession(ctx, userID, session.User.Email, session.AccessToken); err != nil {
-		return err
-	}
-	return b.respondEmbed(s, i, successEmbed("Logged In", "Your Discord account is now connected to Stanks.", []*discordgo.MessageEmbedField{
-		{Name: "Email", Value: session.User.Email, Inline: true},
-	}))
-}
-
-func (b *Bot) handleLogout(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	userID, err := interactionUserID(i)
-	if err != nil {
-		return err
-	}
-	if err := b.store.DeleteSession(ctx, userID); err != nil {
-		return err
-	}
-	return b.respondEmbed(s, i, infoEmbed("Logged Out", "This Discord account is no longer linked to a Stanks session.", nil))
-}
-
-func (b *Bot) handleDashboard(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	token, _, err := b.requireSession(ctx, s, i)
-	if err != nil {
-		return err
-	}
-	raw, err := b.client.Dashboard(ctx, token)
-	if err != nil {
-		return b.respondAuthAwareError(ctx, s, i, err)
-	}
-	out, err := decodeInto[game.Dashboard](raw)
-	if err != nil {
-		return err
+func (b *Bot) handleComponent(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	data := i.MessageComponentData()
+	parts := parseCustomID(data.CustomID)
+	if len(parts) == 0 {
+		return
 	}
 
-	fields := []*discordgo.MessageEmbedField{
-		{Name: "Balance", Value: formatMicros(out.BalanceMicros), Inline: true},
-		{Name: "Net Worth", Value: formatMicros(out.NetWorthMicros), Inline: true},
-		{Name: "Peak", Value: formatMicros(out.PeakNetWorthMicros), Inline: true},
-	}
-	if out.ActiveBusinessID != nil {
-		fields = append(fields, &discordgo.MessageEmbedField{Name: "Active Business ID", Value: strconv.FormatInt(*out.ActiveBusinessID, 10), Inline: true})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := b.beginDeferredResponse(s, i); err != nil {
+		b.log.Error("discord component defer failed", "custom_id", data.CustomID, "err", err)
+		return
 	}
 
-	description := "No businesses yet."
-	if len(out.Businesses) > 0 {
-		lines := make([]string, 0, min(len(out.Businesses), 5))
-		for idx, business := range out.Businesses {
-			if idx >= 5 {
-				break
-			}
-			lines = append(lines, fmt.Sprintf("`#%d` **%s** | rev/tick %s | employees %d/%d", business.ID, business.Name, formatMicros(business.RevenuePerTickMicros), business.EmployeeCount, business.EmployeeLimit))
+	var err error
+	switch parts[0] {
+	case "nav":
+		err = b.handleNavButton(ctx, s, i, parts)
+	case "refresh":
+		err = b.handleRefreshButton(ctx, s, i, parts)
+	case "refresh_stock":
+		err = b.handleRefreshStockButton(ctx, s, i, parts)
+	case "refresh_biz":
+		err = b.handleRefreshBizButton(ctx, s, i, parts)
+	case "quickbuy":
+		if len(parts) >= 2 {
+			err = b.respondEmbed(s, i, infoEmbed("Quick Buy", fmt.Sprintf("Use `/order symbol:%s side:buy shares:<amount>` to buy.", parts[1]), nil))
 		}
-		description = strings.Join(lines, "\n")
-	}
-	return b.respondEmbed(s, i, infoEmbed("Dashboard", description, fields))
-}
-
-func (b *Bot) handleWallet(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	token, email, err := b.requireSession(ctx, s, i)
-	if err != nil {
-		return err
-	}
-	raw, err := b.client.WalletSummary(ctx, token)
-	if err != nil {
-		return b.respondAuthAwareError(ctx, s, i, err)
-	}
-	out, err := decodeInto[game.WalletSummary](raw)
-	if err != nil {
-		return err
-	}
-	fields := []*discordgo.MessageEmbedField{
-		{Name: "Email", Value: email, Inline: true},
-		{Name: "Balance", Value: formatMicros(out.BalanceMicros), Inline: true},
-		{Name: "Peak Net Worth", Value: formatMicros(out.PeakNetWorthMicros), Inline: true},
-	}
-	if out.ActiveBusinessID != nil {
-		fields = append(fields, &discordgo.MessageEmbedField{Name: "Active Business ID", Value: strconv.FormatInt(*out.ActiveBusinessID, 10), Inline: true})
-	}
-	return b.respondEmbed(s, i, infoEmbed("Wallet", "Current account balance and progression.", fields))
-}
-
-func (b *Bot) handleStocks(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	all := boolOption(i.ApplicationCommandData().Options, "all")
-	raw, err := b.client.ListStocks(ctx, "", all)
-	if err != nil {
-		return b.respondError(s, i, trimAPIError(err))
-	}
-	out, err := decodeInto[stocksPayload](raw)
-	if err != nil {
-		return err
-	}
-	if len(out.Stocks) == 0 {
-		return b.respondEmbed(s, i, infoEmbed("Stocks", "No stocks are available right now.", nil))
-	}
-
-	lines := make([]string, 0, min(len(out.Stocks), 12))
-	for idx, stock := range out.Stocks {
-		if idx >= 12 {
-			break
+	case "quicksell":
+		if len(parts) >= 2 {
+			err = b.respondEmbed(s, i, infoEmbed("Quick Sell", fmt.Sprintf("Use `/order symbol:%s side:sell shares:<amount>` to sell.", parts[1]), nil))
 		}
-		status := "private"
-		if stock.ListedPublic {
-			status = "public"
-		}
-		lines = append(lines, fmt.Sprintf("`%s` **%s** | %s | %s", strings.TrimSpace(stock.Symbol), stock.DisplayName, formatMicros(stock.CurrentPriceMicros), status))
+	case "biz_employees":
+		err = b.handleBizEmployeesButton(ctx, s, i, parts)
+	case "biz_machinery":
+		err = b.handleBizMachineryButton(ctx, s, i, parts)
+	case "biz_loans":
+		err = b.handleBizLoansButton(ctx, s, i, parts)
+	case "page":
+		err = b.handlePageButton(ctx, s, i, parts)
+	default:
+		err = b.respondEmbed(s, i, errorEmbed("Unknown action."))
 	}
-	fields := []*discordgo.MessageEmbedField{
-		{Name: "Count", Value: strconv.Itoa(len(out.Stocks)), Inline: true},
-		{Name: "Mode", Value: ternary(all, "all", "public only"), Inline: true},
+	if err != nil {
+		b.log.Error("discord component failed", "custom_id", data.CustomID, "err", err)
+		_ = b.respondEmbed(s, i, errorEmbed("That action failed."))
 	}
-	return b.respondEmbed(s, i, infoEmbed("Stock List", strings.Join(lines, "\n"), fields))
 }
 
-func (b *Bot) handleStock(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	symbol := strings.ToUpper(strings.TrimSpace(stringOption(i.ApplicationCommandData().Options, "symbol", "")))
+func (b *Bot) handleNavButton(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, parts []string) error {
+	if len(parts) < 2 {
+		return nil
+	}
+	switch parts[1] {
+	case "portfolio":
+		return b.handlePortfolio(ctx, s, i)
+	case "stocks":
+		raw, err := b.client.ListStocks(ctx, "", false)
+		if err != nil {
+			return b.respondError(s, i, trimAPIError(err))
+		}
+		out, err := decodeInto[stocksPayload](raw)
+		if err != nil {
+			return err
+		}
+		return b.renderStockPage(s, i, out.Stocks, 0, false)
+	case "funds":
+		return b.handleFunds(ctx, s, i)
+	}
+	return nil
+}
+
+func (b *Bot) handleRefreshButton(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, parts []string) error {
+	if len(parts) < 2 {
+		return nil
+	}
+	if parts[1] == "dashboard" {
+		return b.handleDashboard(ctx, s, i)
+	}
+	return nil
+}
+
+func (b *Bot) handleRefreshStockButton(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, parts []string) error {
+	if len(parts) < 2 {
+		return nil
+	}
+	symbol := parts[1]
 	raw, err := b.client.StockDetail(ctx, "", symbol)
 	if err != nil {
 		return b.respondError(s, i, trimAPIError(err))
@@ -513,79 +325,43 @@ func (b *Bot) handleStock(ctx context.Context, s *discordgo.Session, i *discordg
 	if err != nil {
 		return err
 	}
-	description := fmt.Sprintf("**%s**\nCurrent price: %s", out.DisplayName, formatMicros(out.CurrentPriceMicros))
+
+	desc := fmt.Sprintf("**%s**\nCurrent price: %s", out.DisplayName, fmtStonky(out.CurrentPriceMicros))
 	if len(out.Series) > 0 {
-		points := make([]string, 0, min(len(out.Series), 5))
-		start := max(0, len(out.Series)-5)
-		for _, point := range out.Series[start:] {
-			points = append(points, fmt.Sprintf("%s %s", point.TickAt.UTC().Format("Jan 02 15:04"), formatMicros(point.PriceMicros)))
+		prices := make([]int64, len(out.Series))
+		for idx, p := range out.Series {
+			prices[idx] = p.PriceMicros
 		}
-		description += "\n\nRecent ticks:\n" + strings.Join(points, "\n")
+		desc += "\n\nPrice trend: `" + sparkline(prices) + "`"
+
+		recent := out.Series
+		if len(recent) > 5 {
+			recent = recent[len(recent)-5:]
+		}
+		points := make([]string, 0, len(recent))
+		for _, point := range recent {
+			points = append(points, fmt.Sprintf("%s %s", point.TickAt.UTC().Format("Jan 02 15:04"), fmtStonky(point.PriceMicros)))
+		}
+		desc += "\n\n" + strings.Join(points, "\n")
 	}
-	return b.respondEmbed(s, i, infoEmbed("Stock Detail", description, []*discordgo.MessageEmbedField{
-		{Name: "Symbol", Value: strings.TrimSpace(out.Symbol), Inline: true},
-		{Name: "Listed", Value: ternary(out.ListedPublic, "yes", "no"), Inline: true},
-	}))
+
+	eb := NewEmbed().Title("Stock | "+strings.TrimSpace(out.Symbol)).Color(colorMarket).
+		Desc(desc).
+		Field("Symbol", strings.TrimSpace(out.Symbol), true).
+		Field("Listed", ternary(out.ListedPublic, "yes", "no"), true)
+
+	return b.respondEmbedWithComponents(s, i, eb.Build(), []discordgo.MessageComponent{stockActionButtons(strings.TrimSpace(out.Symbol))})
 }
 
-func (b *Bot) handleOrder(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
+func (b *Bot) handleRefreshBizButton(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, parts []string) error {
+	if len(parts) < 2 {
+		return nil
+	}
 	token, _, err := b.requireSession(ctx, s, i)
 	if err != nil {
 		return err
 	}
-	data := i.ApplicationCommandData()
-	symbol := strings.ToUpper(strings.TrimSpace(stringOption(data.Options, "symbol", "")))
-	side := strings.ToLower(strings.TrimSpace(stringOption(data.Options, "side", "")))
-	shares := numberOption(data.Options, "shares", 0)
-	units, err := game.SharesToUnits(shares)
-	if err != nil {
-		return b.respondError(s, i, err.Error())
-	}
-	raw, err := b.client.PlaceOrder(ctx, token, symbol, side, uuid.NewString(), units)
-	if err != nil {
-		return b.respondAuthAwareError(ctx, s, i, err)
-	}
-	out, err := decodeInto[game.OrderResult](raw)
-	if err != nil {
-		return err
-	}
-	return b.respondEmbed(s, i, successEmbed("Order Filled", fmt.Sprintf("%s %.4f shares of `%s`.", strings.Title(side), shares, symbol), []*discordgo.MessageEmbedField{
-		{Name: "Order ID", Value: strconv.FormatInt(out.OrderID, 10), Inline: true},
-		{Name: "Price", Value: formatMicros(out.PriceMicros), Inline: true},
-		{Name: "Notional", Value: formatMicros(out.NotionalMicros), Inline: true},
-		{Name: "Fee", Value: formatMicros(out.FeeMicros), Inline: true},
-		{Name: "New Balance", Value: formatMicros(out.BalanceMicros), Inline: true},
-	}))
-}
-
-func (b *Bot) handleBusinessCreate(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	token, _, err := b.requireSession(ctx, s, i)
-	if err != nil {
-		return err
-	}
-	data := i.ApplicationCommandData()
-	name := strings.TrimSpace(stringOption(data.Options, "name", ""))
-	visibility := strings.TrimSpace(stringOption(data.Options, "visibility", "private"))
-	raw, err := b.client.CreateBusiness(ctx, token, name, visibility, uuid.NewString())
-	if err != nil {
-		return b.respondAuthAwareError(ctx, s, i, err)
-	}
-	out, err := decodeInto[idPayload](raw)
-	if err != nil {
-		return err
-	}
-	return b.respondEmbed(s, i, successEmbed("Business Created", fmt.Sprintf("**%s** is live.", name), []*discordgo.MessageEmbedField{
-		{Name: "Business ID", Value: strconv.FormatInt(out.ID, 10), Inline: true},
-		{Name: "Visibility", Value: visibility, Inline: true},
-	}))
-}
-
-func (b *Bot) handleBusiness(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	token, _, err := b.requireSession(ctx, s, i)
-	if err != nil {
-		return err
-	}
-	businessID := int64(integerOption(i.ApplicationCommandData().Options, "business_id", 0))
+	businessID, _ := strconv.ParseInt(parts[1], 10, 64)
 	raw, err := b.client.BusinessState(ctx, token, businessID)
 	if err != nil {
 		return b.respondAuthAwareError(ctx, s, i, err)
@@ -594,55 +370,28 @@ func (b *Bot) handleBusiness(ctx context.Context, s *discordgo.Session, i *disco
 	if err != nil {
 		return err
 	}
-	fields := []*discordgo.MessageEmbedField{
-		{Name: "Employees", Value: fmt.Sprintf("%d / %d", out.EmployeeCount, out.EmployeeLimit), Inline: true},
-		{Name: "Revenue/Tick", Value: formatMicros(out.RevenuePerTickMicros), Inline: true},
-		{Name: "Operating Costs", Value: formatMicros(out.OperatingCostsMicros), Inline: true},
-		{Name: "Strategy", Value: out.Strategy, Inline: true},
-		{Name: "Brand", Value: fmt.Sprintf("%.2f%%", float64(out.BrandBps)/100), Inline: true},
-		{Name: "Operational Health", Value: fmt.Sprintf("%.2f%%", float64(out.OperationalHealthBps)/100), Inline: true},
-	}
-	if strings.TrimSpace(out.StockSymbol) != "" {
-		fields = append(fields, &discordgo.MessageEmbedField{Name: "Stock", Value: strings.TrimSpace(out.StockSymbol), Inline: true})
-	}
-	if strings.TrimSpace(out.LastEvent) != "" {
-		fields = append(fields, &discordgo.MessageEmbedField{Name: "Last Event", Value: out.LastEvent, Inline: false})
-	}
-	return b.respondEmbed(s, i, infoEmbed(fmt.Sprintf("Business #%d", out.ID), out.Name, fields))
+
+	eb := NewEmbed().Title(fmt.Sprintf("Business #%d", out.ID)).Color(colorBusiness).
+		Desc(out.Name).
+		Field("Employees", fmt.Sprintf("%d / %d", out.EmployeeCount, out.EmployeeLimit), true).
+		Field("Revenue/Tick", fmtStonky(out.RevenuePerTickMicros), true).
+		Field("Operating Costs", fmtStonky(out.OperatingCostsMicros), true).
+		Field("Strategy", out.Strategy, true).
+		Field("Brand", progressBar(out.BrandBps, 10000, 10), true).
+		Field("Health", progressBar(out.OperationalHealthBps, 10000, 10), true)
+
+	return b.respondEmbedWithComponents(s, i, eb.Build(), []discordgo.MessageComponent{businessActionButtons(out.ID)})
 }
 
-func (b *Bot) handleCandidates(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	raw, err := b.client.ListEmployeeCandidates(ctx, "")
-	if err != nil {
-		return b.respondError(s, i, trimAPIError(err))
+func (b *Bot) handleBizEmployeesButton(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, parts []string) error {
+	if len(parts) < 2 {
+		return nil
 	}
-	out, err := decodeInto[candidatesPayload](raw)
-	if err != nil {
-		return err
-	}
-	if len(out.Candidates) == 0 {
-		return b.respondEmbed(s, i, infoEmbed("Candidates", "No employee candidates are available right now.", nil))
-	}
-
-	lines := make([]string, 0, min(len(out.Candidates), 10))
-	for idx, candidate := range out.Candidates {
-		if idx >= 10 {
-			break
-		}
-		lines = append(lines, fmt.Sprintf("`#%d` **%s** | %s | cost %s | rev %s | risk %.2f%%", candidate.ID, candidate.FullName, candidate.Role, formatMicros(candidate.HireCostMicros), formatMicros(candidate.RevenuePerTickMicros), float64(candidate.RiskBps)/100))
-	}
-	return b.respondEmbed(s, i, infoEmbed("Candidates", strings.Join(lines, "\n"), []*discordgo.MessageEmbedField{
-		{Name: "Shown", Value: strconv.Itoa(min(len(out.Candidates), 10)), Inline: true},
-		{Name: "Total", Value: strconv.Itoa(len(out.Candidates)), Inline: true},
-	}))
-}
-
-func (b *Bot) handleEmployees(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
 	token, _, err := b.requireSession(ctx, s, i)
 	if err != nil {
 		return err
 	}
-	businessID := int64(integerOption(i.ApplicationCommandData().Options, "business_id", 0))
+	businessID, _ := strconv.ParseInt(parts[1], 10, 64)
 	raw, err := b.client.ListBusinessEmployees(ctx, token, businessID)
 	if err != nil {
 		return b.respondAuthAwareError(ctx, s, i, err)
@@ -654,89 +403,136 @@ func (b *Bot) handleEmployees(ctx context.Context, s *discordgo.Session, i *disc
 	if len(out.Employees) == 0 {
 		return b.respondEmbed(s, i, infoEmbed("Employees", fmt.Sprintf("Business `%d` has no employees yet.", businessID), nil))
 	}
-
-	lines := make([]string, 0, min(len(out.Employees), 10))
-	for idx, employee := range out.Employees {
-		if idx >= 10 {
-			break
-		}
-		lines = append(lines, fmt.Sprintf("`#%d` **%s** | %s | rev %s | risk %.2f%%", employee.ID, employee.FullName, employee.Role, formatMicros(employee.RevenuePerTickMicros), float64(employee.RiskBps)/100))
-	}
-	return b.respondEmbed(s, i, infoEmbed("Employees", strings.Join(lines, "\n"), []*discordgo.MessageEmbedField{
-		{Name: "Business ID", Value: strconv.FormatInt(businessID, 10), Inline: true},
-		{Name: "Total", Value: strconv.Itoa(len(out.Employees)), Inline: true},
-	}))
+	return b.renderEmployeePage(s, i, out.Employees, 0, businessID)
 }
 
-func (b *Bot) handleHireMany(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
+func (b *Bot) handleBizMachineryButton(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, parts []string) error {
+	if len(parts) < 2 {
+		return nil
+	}
 	token, _, err := b.requireSession(ctx, s, i)
 	if err != nil {
 		return err
 	}
-	data := i.ApplicationCommandData()
-	businessID := int64(integerOption(data.Options, "business_id", 0))
-	count := integerOption(data.Options, "count", 0)
-	strategy := strings.TrimSpace(stringOption(data.Options, "strategy", "best_value"))
-
-	raw, err := b.client.HireEmployeesBulk(ctx, token, businessID, int(count), strategy, uuid.NewString())
+	businessID, _ := strconv.ParseInt(parts[1], 10, 64)
+	raw, err := b.client.ListBusinessMachinery(ctx, token, businessID)
 	if err != nil {
 		return b.respondAuthAwareError(ctx, s, i, err)
 	}
-	description := fmt.Sprintf("Bulk hiring finished for business `%d`.", businessID)
-	fields := fieldsFromMap(raw, []fieldMapping{
-		{Key: "strategy", Label: "Strategy"},
-		{Key: "requested_count", Label: "Requested"},
-		{Key: "hired_count", Label: "Hired"},
-		{Key: "employee_count", Label: "Employee Count"},
-		{Key: "employee_slots_remaining", Label: "Slots Remaining"},
-		{Key: "total_cost_micros", Label: "Total Cost", Micros: true},
-		{Key: "new_balance_micros", Label: "New Balance", Micros: true},
-	})
-	if preview := stringSliceFromMap(raw, "hired_name_preview"); len(preview) > 0 {
-		description += "\n\nPreview:\n" + strings.Join(preview, "\n")
+	machines, ok := raw["machines"]
+	if !ok {
+		return b.respondEmbed(s, i, infoEmbed("Machinery", fmt.Sprintf("Business `%d` has no machinery.", businessID), nil))
 	}
-	if preview := stringSliceFromMap(raw, "hired_names"); len(preview) > 0 {
-		description += "\n\nHired:\n" + strings.Join(preview, "\n")
+	items, ok := machines.([]any)
+	if !ok || len(items) == 0 {
+		return b.respondEmbed(s, i, infoEmbed("Machinery", fmt.Sprintf("Business `%d` has no machinery.", businessID), nil))
 	}
-	return b.respondEmbed(s, i, successEmbed("Hiring Complete", description, fields))
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("`%s` | output %s | upkeep %s",
+			fmt.Sprint(m["machine_type"]),
+			formatMaybeMicros(m["output_micros"]),
+			formatMaybeMicros(m["upkeep_micros"]),
+		))
+	}
+	return b.respondEmbed(s, i, infoEmbed("Machinery", strings.Join(lines, "\n"), []*discordgo.MessageEmbedField{
+		{Name: "Business ID", Value: strconv.FormatInt(businessID, 10), Inline: true},
+	}))
 }
 
-func (b *Bot) handleLeaderboard(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	scope := strings.TrimSpace(stringOption(i.ApplicationCommandData().Options, "scope", "global"))
-
-	var raw map[string]any
-	var err error
-	if scope == "friends" {
-		token, _, tokenErr := b.requireSession(ctx, s, i)
-		if tokenErr != nil {
-			return tokenErr
-		}
-		raw, err = b.client.LeaderboardFriends(ctx, token)
-		if err != nil {
-			return b.respondAuthAwareError(ctx, s, i, err)
-		}
-	} else {
-		raw, err = b.client.LeaderboardGlobal(ctx, "")
-		if err != nil {
-			return b.respondError(s, i, trimAPIError(err))
-		}
+func (b *Bot) handleBizLoansButton(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, parts []string) error {
+	if len(parts) < 2 {
+		return nil
 	}
-
-	out, err := decodeInto[leaderboardPayload](raw)
+	token, _, err := b.requireSession(ctx, s, i)
 	if err != nil {
 		return err
 	}
-	if len(out.Rows) == 0 {
-		return b.respondEmbed(s, i, infoEmbed("Leaderboard", "No leaderboard data yet.", nil))
+	businessID, _ := strconv.ParseInt(parts[1], 10, 64)
+	raw, err := b.client.ListBusinessLoans(ctx, token, businessID)
+	if err != nil {
+		return b.respondAuthAwareError(ctx, s, i, err)
 	}
-	lines := make([]string, 0, min(len(out.Rows), 10))
-	for idx, row := range out.Rows {
-		if idx >= 10 {
-			break
+	loans, ok := raw["loans"]
+	if !ok {
+		return b.respondEmbed(s, i, infoEmbed("Loans", fmt.Sprintf("Business `%d` has no outstanding loans.", businessID), nil))
+	}
+	items, ok := loans.([]any)
+	if !ok || len(items) == 0 {
+		return b.respondEmbed(s, i, infoEmbed("Loans", fmt.Sprintf("Business `%d` has no outstanding loans.", businessID), nil))
+	}
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
 		}
-		lines = append(lines, fmt.Sprintf("`#%d` **%s** | %s", row.Rank, row.Username, formatMicros(row.NetWorthMicros)))
+		lines = append(lines, fmt.Sprintf("Outstanding: %s | Due: %s",
+			formatMaybeMicros(m["outstanding_micros"]),
+			formatMaybeMicros(m["due_amount_micros"]),
+		))
 	}
-	return b.respondEmbed(s, i, infoEmbed(strings.Title(scope)+" Leaderboard", strings.Join(lines, "\n"), nil))
+	return b.respondEmbed(s, i, infoEmbed("Loans", strings.Join(lines, "\n"), []*discordgo.MessageEmbedField{
+		{Name: "Business ID", Value: strconv.FormatInt(businessID, 10), Inline: true},
+	}))
+}
+
+func (b *Bot) handlePageButton(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, parts []string) error {
+	if len(parts) < 3 {
+		return nil
+	}
+	namespace := parts[1]
+	page, _ := strconv.Atoi(parts[2])
+
+	switch namespace {
+	case "stocks":
+		all := false
+		if len(parts) >= 4 {
+			all = parts[3] == "true"
+		}
+		raw, err := b.client.ListStocks(ctx, "", all)
+		if err != nil {
+			return b.respondError(s, i, trimAPIError(err))
+		}
+		out, err := decodeInto[stocksPayload](raw)
+		if err != nil {
+			return err
+		}
+		return b.renderStockPage(s, i, out.Stocks, page, all)
+	case "candidates":
+		raw, err := b.client.ListEmployeeCandidates(ctx, "")
+		if err != nil {
+			return b.respondError(s, i, trimAPIError(err))
+		}
+		out, err := decodeInto[candidatesPayload](raw)
+		if err != nil {
+			return err
+		}
+		return b.renderCandidatePage(s, i, out.Candidates, page)
+	case "employees":
+		if len(parts) < 4 {
+			return nil
+		}
+		token, _, err := b.requireSession(ctx, s, i)
+		if err != nil {
+			return err
+		}
+		businessID, _ := strconv.ParseInt(parts[3], 10, 64)
+		raw, err := b.client.ListBusinessEmployees(ctx, token, businessID)
+		if err != nil {
+			return b.respondAuthAwareError(ctx, s, i, err)
+		}
+		out, err := decodeInto[businessEmployeesPayload](raw)
+		if err != nil {
+			return err
+		}
+		return b.renderEmployeePage(s, i, out.Employees, page, businessID)
+	}
+	return nil
 }
 
 func (b *Bot) requireSession(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) (string, string, error) {
@@ -788,6 +584,15 @@ func (b *Bot) respondEmbed(s *discordgo.Session, i *discordgo.InteractionCreate,
 	return err
 }
 
+func (b *Bot) respondEmbedWithComponents(s *discordgo.Session, i *discordgo.InteractionCreate, embed *discordgo.MessageEmbed, components []discordgo.MessageComponent) error {
+	embeds := []*discordgo.MessageEmbed{embed}
+	_, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Embeds:     &embeds,
+		Components: &components,
+	})
+	return err
+}
+
 func (b *Bot) respondError(s *discordgo.Session, i *discordgo.InteractionCreate, message string) error {
 	return b.respondEmbed(s, i, errorEmbed(message))
 }
@@ -807,29 +612,6 @@ func (b *Bot) respondFallbackError(s *discordgo.Session, i *discordgo.Interactio
 		return nil
 	}
 	return b.respondImmediateError(s, i, message)
-}
-
-func successEmbed(title, description string, fields []*discordgo.MessageEmbedField) *discordgo.MessageEmbed {
-	return baseEmbed(title, description, colorPrimary, fields)
-}
-
-func errorEmbed(message string) *discordgo.MessageEmbed {
-	return baseEmbed("Request Failed", message, colorDanger, nil)
-}
-
-func infoEmbed(title, description string, fields []*discordgo.MessageEmbedField) *discordgo.MessageEmbed {
-	return baseEmbed(title, description, colorInfo, fields)
-}
-
-func baseEmbed(title, description string, color int, fields []*discordgo.MessageEmbedField) *discordgo.MessageEmbed {
-	return &discordgo.MessageEmbed{
-		Title:       title,
-		Description: description,
-		Color:       color,
-		Fields:      fields,
-		Footer:      &discordgo.MessageEmbedFooter{Text: "Stanks"},
-		Timestamp:   time.Now().UTC().Format(time.RFC3339),
-	}
 }
 
 func modalValues(components []discordgo.MessageComponent) map[string]string {
@@ -864,30 +646,6 @@ func decodeInto[T any](raw map[string]any) (T, error) {
 	}
 	err = json.Unmarshal(buf, &out)
 	return out, err
-}
-
-type fieldMapping struct {
-	Key    string
-	Label  string
-	Micros bool
-}
-
-func fieldsFromMap(raw map[string]any, mappings []fieldMapping) []*discordgo.MessageEmbedField {
-	fields := make([]*discordgo.MessageEmbedField, 0, len(mappings))
-	for _, mapping := range mappings {
-		value, ok := raw[mapping.Key]
-		if !ok {
-			continue
-		}
-		text := fmt.Sprint(value)
-		if mapping.Micros {
-			if micros, ok := toInt64(value); ok {
-				text = formatMicros(micros)
-			}
-		}
-		fields = append(fields, &discordgo.MessageEmbedField{Name: mapping.Label, Value: text, Inline: true})
-	}
-	return fields
 }
 
 func stringSliceFromMap(raw map[string]any, key string) []string {
@@ -940,7 +698,7 @@ func isUnauthorizedAPIError(err error) bool {
 }
 
 func formatMicros(v int64) string {
-	return fmt.Sprintf("%.2f stonky", game.MicrosToStonky(v))
+	return fmtStonky(v)
 }
 
 func stringOption(options []*discordgo.ApplicationCommandInteractionDataOption, name, fallback string) string {

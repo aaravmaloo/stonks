@@ -4,85 +4,54 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	adminapi "stanks/internal/admin"
 	"stanks/internal/config"
-	"stanks/internal/db"
 	"stanks/internal/game"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 )
 
 type adminStore struct {
-	db *pgxpool.Pool
+	baseURL  string
+	client   *http.Client
+	username string
+	password string
 }
 
-type playerRow struct {
-	UserID             string
-	Email              string
-	Username           string
-	InviteCode         string
-	BalanceMicros      int64
-	PeakNetWorthMicros int64
-	ActiveBusinessID   *int64
-}
-
-type businessRow struct {
-	ID                int64
-	Name              string
-	Visibility        string
-	IsListed          bool
-	BaseRevenueMicros int64
-}
-
-type positionRow struct {
-	Symbol         string
-	DisplayName    string
-	QuantityUnits  int64
-	AvgPriceMicros int64
-}
-
-type stockRow struct {
-	Symbol             string
-	DisplayName        string
-	CurrentPriceMicros int64
-	AnchorPriceMicros  int64
-	ListedPublic       bool
-}
+type playerRow = adminapi.Player
+type businessRow = adminapi.Business
+type positionRow = adminapi.Position
+type stockRow = adminapi.Stock
 
 var stdinReader = bufio.NewReader(os.Stdin)
 
 func main() {
 	loadAdminEnv()
 
-	cfg, err := config.LoadAPIFromEnv()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+	cfg := config.LoadCLIFromEnv()
+
+	store := &adminStore{
+		baseURL: cfg.APIBaseURL,
+		client: &http.Client{
+			Timeout: 2 * time.Minute,
+		},
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	pool, err := db.Connect(ctx, cfg.DatabaseURL)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: connect db: %v\n", err)
-		os.Exit(1)
-	}
-	defer pool.Close()
-
-	store := &adminStore{db: pool}
 	root := &cobra.Command{
 		Use:           "admin",
 		Short:         "Administrative control CLI for Stanks",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return requireAdminAccess()
+			switch cmd.Name() {
+			case "help", "completion":
+				return nil
+			}
+			return requireAdminAccess(store)
 		},
 	}
 
@@ -128,7 +97,7 @@ func newPlayersCmd(store *adminStore) *cobra.Command {
 			if len(args) > 0 {
 				query = strings.TrimSpace(args[0])
 			}
-			rows, err := store.listPlayers(ctx, query)
+			rows, err := store.ListPlayers(ctx, query)
 			if err != nil {
 				return err
 			}
@@ -164,7 +133,7 @@ func newChangeBalanceCmd(store *adminStore) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			row, err := store.changeBalance(ctx, strings.TrimSpace(args[0]), deltaMicros)
+			row, err := store.ChangeBalance(ctx, strings.TrimSpace(args[0]), deltaMicros)
 			if err != nil {
 				return err
 			}
@@ -186,7 +155,7 @@ func newSetBalanceCmd(store *adminStore) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			row, err := store.setBalance(ctx, strings.TrimSpace(args[0]), amountMicros)
+			row, err := store.SetBalance(ctx, strings.TrimSpace(args[0]), amountMicros)
 			if err != nil {
 				return err
 			}
@@ -209,7 +178,7 @@ func newChangePeakCmd(store *adminStore) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			row, err := store.changePeak(ctx, strings.TrimSpace(args[0]), deltaMicros)
+			row, err := store.ChangePeak(ctx, strings.TrimSpace(args[0]), deltaMicros)
 			if err != nil {
 				return err
 			}
@@ -231,7 +200,7 @@ func newSetPeakCmd(store *adminStore) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			row, err := store.setPeak(ctx, strings.TrimSpace(args[0]), amountMicros)
+			row, err := store.SetPeak(ctx, strings.TrimSpace(args[0]), amountMicros)
 			if err != nil {
 				return err
 			}
@@ -253,7 +222,7 @@ func newSetActiveBusinessCmd(store *adminStore) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			row, err := store.setActiveBusiness(ctx, strings.TrimSpace(args[0]), businessID)
+			row, err := store.SetActiveBusiness(ctx, strings.TrimSpace(args[0]), businessID)
 			if err != nil {
 				return err
 			}
@@ -275,7 +244,7 @@ func newListBusinessesCmd(store *adminStore) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			rows, err := store.listBusinessesByUser(ctx, strings.TrimSpace(args[0]))
+			rows, err := store.ListBusinessesByUser(ctx, strings.TrimSpace(args[0]))
 			if err != nil {
 				return err
 			}
@@ -301,7 +270,7 @@ func newSetBusinessNameCmd(store *adminStore) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			row, err := store.setBusinessName(ctx, businessID, name)
+			row, err := store.SetBusinessName(ctx, businessID, name)
 			if err != nil {
 				return err
 			}
@@ -324,7 +293,7 @@ func newSetBusinessVisibilityCmd(store *adminStore) *cobra.Command {
 			visibility := strings.ToLower(strings.TrimSpace(args[1]))
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			row, err := store.setBusinessVisibility(ctx, businessID, visibility)
+			row, err := store.SetBusinessVisibility(ctx, businessID, visibility)
 			if err != nil {
 				return err
 			}
@@ -350,7 +319,7 @@ func newSetBusinessListedCmd(store *adminStore) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			row, err := store.setBusinessListed(ctx, businessID, listed)
+			row, err := store.SetBusinessListed(ctx, businessID, listed)
 			if err != nil {
 				return err
 			}
@@ -376,7 +345,7 @@ func newSetBusinessRevenueCmd(store *adminStore) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			row, err := store.setBusinessRevenue(ctx, businessID, amountMicros)
+			row, err := store.SetBusinessRevenue(ctx, businessID, amountMicros)
 			if err != nil {
 				return err
 			}
@@ -398,7 +367,7 @@ func newDeleteBusinessCmd(store *adminStore) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			return store.deleteBusiness(ctx, businessID)
+			return store.DeleteBusiness(ctx, businessID)
 		},
 	}
 }
@@ -411,7 +380,7 @@ func newListPositionsCmd(store *adminStore) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			rows, err := store.listPositionsByUser(ctx, strings.TrimSpace(args[0]))
+			rows, err := store.ListPositionsByUser(ctx, strings.TrimSpace(args[0]))
 			if err != nil {
 				return err
 			}
@@ -437,7 +406,7 @@ func newSetPositionCmd(store *adminStore) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			row, err := store.setPosition(ctx, strings.TrimSpace(args[0]), strings.ToUpper(strings.TrimSpace(args[1])), shares, priceMicros)
+			row, err := store.SetPosition(ctx, strings.TrimSpace(args[0]), strings.ToUpper(strings.TrimSpace(args[1])), shares, priceMicros)
 			if err != nil {
 				return err
 			}
@@ -455,7 +424,7 @@ func newDeletePositionCmd(store *adminStore) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			return store.deletePosition(ctx, strings.TrimSpace(args[0]), strings.ToUpper(strings.TrimSpace(args[1])))
+			return store.DeletePosition(ctx, strings.TrimSpace(args[0]), strings.ToUpper(strings.TrimSpace(args[1])))
 		},
 	}
 }
@@ -467,7 +436,7 @@ func newListStocksCmd(store *adminStore) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			rows, err := store.listStocks(ctx)
+			rows, err := store.ListStocks(ctx)
 			if err != nil {
 				return err
 			}
@@ -489,7 +458,7 @@ func newSetStockPriceCmd(store *adminStore) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			row, err := store.setStockPrice(ctx, strings.ToUpper(strings.TrimSpace(args[0])), priceMicros)
+			row, err := store.SetStockPrice(ctx, strings.ToUpper(strings.TrimSpace(args[0])), priceMicros)
 			if err != nil {
 				return err
 			}

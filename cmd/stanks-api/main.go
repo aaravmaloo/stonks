@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"stanks/internal/api"
+	"stanks/internal/admin"
 	"stanks/internal/auth"
 	"stanks/internal/config"
 	"stanks/internal/db"
@@ -40,6 +41,7 @@ func main() {
 
 	authClient := auth.NewClient(pool)
 	gameSvc := game.NewService(pool, logger)
+	adminSvc := admin.NewService(pool)
 
 	seasonID, err := gameSvc.ActiveSeasonID(ctx)
 	if err != nil {
@@ -57,7 +59,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	server := api.New(cfg, logger, authClient, gameSvc)
+	server := api.New(cfg, logger, authClient, gameSvc, adminSvc)
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           server.Handler(),

@@ -11,6 +11,8 @@ import (
 type APIConfig struct {
 	Addr              string
 	DatabaseURL       string
+	AdminUsername     string
+	AdminPassword     string
 	MarketTickEvery   time.Duration
 	EmployeePerTick   int
 	NewStocksPerTick  int
@@ -44,6 +46,8 @@ func LoadAPIFromEnv() (APIConfig, error) {
 	cfg := APIConfig{
 		Addr:              addr,
 		DatabaseURL:       strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		AdminUsername:     strings.TrimSpace(os.Getenv("ADMIN_USRN")),
+		AdminPassword:     strings.TrimSpace(os.Getenv("ADMIN_PASS")),
 		MarketTickEvery:   envDurationDefault("STANKS_MARKET_TICK_EVERY", 5*time.Minute),
 		EmployeePerTick:   envIntDefaultAlias([]string{"EMPLOYEE_PER_TICK", "employee_per_tick"}, 1),
 		NewStocksPerTick:  envIntDefaultAlias([]string{"NEW_STOCKS_PER_TICK", "new_stocks_per_tick"}, 0),

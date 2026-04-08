@@ -25,12 +25,22 @@ func loadAdminEnv() {
 	_ = config.LoadDotEnvIfPresent(filepath.Join(exeDir, ".env"))
 }
 
-func requireAdminAccess() error {
-	if strings.TrimSpace(os.Getenv("DATABASE_URL")) == "" {
-		return fmt.Errorf("DATABASE_URL is required")
+func requireAdminAccess(store *adminStore) error {
+	if strings.TrimSpace(store.baseURL) == "" {
+		return fmt.Errorf("STK_API_BASE_URL is required")
 	}
-	if strings.TrimSpace(os.Getenv("ADMIN_USRN")) == "" || strings.TrimSpace(os.Getenv("ADMIN_PASS")) == "" {
-		return fmt.Errorf("ADMIN_USRN and ADMIN_PASS must be set in the server env")
+	if store.username != "" && store.password != "" {
+		return nil
 	}
+	username, err := promptRequired("Admin username")
+	if err != nil {
+		return err
+	}
+	password, err := promptPassword("Admin password")
+	if err != nil {
+		return err
+	}
+	store.username = username
+	store.password = password
 	return nil
 }

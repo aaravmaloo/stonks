@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"stanks/internal/admin"
 	"stanks/internal/auth"
 	"stanks/internal/config"
 	"stanks/internal/game"
@@ -36,10 +38,11 @@ type Server struct {
 	log  *slog.Logger
 	auth *auth.Client
 	game *game.Service
+	admin *admin.Service
 	mux  *chi.Mux
 }
 
-func New(cfg config.APIConfig, logger *slog.Logger, authClient *auth.Client, gameSvc *game.Service) *Server {
+func New(cfg config.APIConfig, logger *slog.Logger, authClient *auth.Client, gameSvc *game.Service, adminSvc *admin.Service) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -48,6 +51,7 @@ func New(cfg config.APIConfig, logger *slog.Logger, authClient *auth.Client, gam
 		log:  logger,
 		auth: authClient,
 		game: gameSvc,
+		admin: adminSvc,
 		mux:  chi.NewRouter(),
 	}
 	s.routes()
@@ -115,6 +119,28 @@ func (s *Server) routes() {
 
 			r.Post("/sync/replay", s.handleSyncReplay)
 		})
+
+		r.Group(func(r chi.Router) {
+			r.Use(s.adminAuthMiddleware)
+			r.Get("/admin/players", s.handleAdminPlayers)
+			r.Get("/admin/players/{userID}", s.handleAdminPlayer)
+			r.Post("/admin/players/{userID}/balance/change", s.handleAdminChangeBalance)
+			r.Post("/admin/players/{userID}/balance/set", s.handleAdminSetBalance)
+			r.Post("/admin/players/{userID}/peak/change", s.handleAdminChangePeak)
+			r.Post("/admin/players/{userID}/peak/set", s.handleAdminSetPeak)
+			r.Post("/admin/players/{userID}/active-business", s.handleAdminSetActiveBusiness)
+			r.Get("/admin/players/{userID}/businesses", s.handleAdminBusinesses)
+			r.Get("/admin/players/{userID}/positions", s.handleAdminPositions)
+			r.Post("/admin/players/{userID}/positions/{symbol}", s.handleAdminSetPosition)
+			r.Delete("/admin/players/{userID}/positions/{symbol}", s.handleAdminDeletePosition)
+			r.Post("/admin/businesses/{id}/name", s.handleAdminSetBusinessName)
+			r.Post("/admin/businesses/{id}/visibility", s.handleAdminSetBusinessVisibility)
+			r.Post("/admin/businesses/{id}/listed", s.handleAdminSetBusinessListed)
+			r.Post("/admin/businesses/{id}/revenue", s.handleAdminSetBusinessRevenue)
+			r.Delete("/admin/businesses/{id}", s.handleAdminDeleteBusiness)
+			r.Get("/admin/stocks", s.handleAdminStocks)
+			r.Post("/admin/stocks/{symbol}/price", s.handleAdminSetStockPrice)
+		})
 	})
 }
 
@@ -136,6 +162,29 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			Token:  token,
 		})
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Basic realm="stanks-admin"`)
+			writeError(w, http.StatusUnauthorized, "missing admin credentials")
+			return
+		}
+		if s.cfg.AdminUsername == "" || s.cfg.AdminPassword == "" {
+			writeError(w, http.StatusServiceUnavailable, "admin auth is not configured")
+			return
+		}
+		userOK := subtle.ConstantTimeCompare([]byte(username), []byte(s.cfg.AdminUsername)) == 1
+		passOK := subtle.ConstantTimeCompare([]byte(password), []byte(s.cfg.AdminPassword)) == 1
+		if !userOK || !passOK {
+			w.Header().Set("WWW-Authenticate", `Basic realm="stanks-admin"`)
+			writeError(w, http.StatusUnauthorized, "invalid admin credentials")
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

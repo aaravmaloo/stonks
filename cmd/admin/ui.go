@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 
 	"stanks/internal/game"
+
+	"golang.org/x/term"
 )
 
 func runSelectLoop(ctx context.Context, store *adminStore, userID string) error {
@@ -48,7 +51,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err != nil {
 				return err
 			}
-			row, err := store.changeBalance(ctx, currentUserID, delta)
+			row, err := store.ChangeBalance(ctx, currentUserID, delta)
 			if err != nil {
 				return err
 			}
@@ -58,7 +61,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err != nil {
 				return err
 			}
-			row, err := store.setBalance(ctx, currentUserID, amount)
+			row, err := store.SetBalance(ctx, currentUserID, amount)
 			if err != nil {
 				return err
 			}
@@ -68,7 +71,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err != nil {
 				return err
 			}
-			row, err := store.changePeak(ctx, currentUserID, delta)
+			row, err := store.ChangePeak(ctx, currentUserID, delta)
 			if err != nil {
 				return err
 			}
@@ -78,7 +81,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err != nil {
 				return err
 			}
-			row, err := store.setPeak(ctx, currentUserID, amount)
+			row, err := store.SetPeak(ctx, currentUserID, amount)
 			if err != nil {
 				return err
 			}
@@ -88,7 +91,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err != nil {
 				return err
 			}
-			row, err := store.setActiveBusiness(ctx, currentUserID, businessID)
+			row, err := store.SetActiveBusiness(ctx, currentUserID, businessID)
 			if err != nil {
 				return err
 			}
@@ -98,7 +101,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 				fmt.Printf("Active business -> %d\n", *row.ActiveBusinessID)
 			}
 		case 6:
-			rows, err := store.listBusinessesByUser(ctx, currentUserID)
+			rows, err := store.ListBusinessesByUser(ctx, currentUserID)
 			if err != nil {
 				return err
 			}
@@ -112,7 +115,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err != nil {
 				return err
 			}
-			row, err := store.setBusinessName(ctx, businessID, name)
+			row, err := store.SetBusinessName(ctx, businessID, name)
 			if err != nil {
 				return err
 			}
@@ -126,7 +129,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err != nil {
 				return err
 			}
-			row, err := store.setBusinessVisibility(ctx, businessID, strings.ToLower(visibility))
+			row, err := store.SetBusinessVisibility(ctx, businessID, strings.ToLower(visibility))
 			if err != nil {
 				return err
 			}
@@ -140,7 +143,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err != nil {
 				return err
 			}
-			row, err := store.setBusinessListed(ctx, businessID, listed)
+			row, err := store.SetBusinessListed(ctx, businessID, listed)
 			if err != nil {
 				return err
 			}
@@ -154,7 +157,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err != nil {
 				return err
 			}
-			row, err := store.setBusinessRevenue(ctx, businessID, revenue)
+			row, err := store.SetBusinessRevenue(ctx, businessID, revenue)
 			if err != nil {
 				return err
 			}
@@ -172,11 +175,11 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 				fmt.Println("Delete cancelled.")
 				continue
 			}
-			if err := store.deleteBusiness(ctx, businessID); err != nil {
+			if err := store.DeleteBusiness(ctx, businessID); err != nil {
 				return err
 			}
 		case 12:
-			rows, err := store.listPositionsByUser(ctx, currentUserID)
+			rows, err := store.ListPositionsByUser(ctx, currentUserID)
 			if err != nil {
 				return err
 			}
@@ -194,7 +197,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err != nil {
 				return err
 			}
-			row, err := store.setPosition(ctx, currentUserID, strings.ToUpper(symbol), shares, price)
+			row, err := store.SetPosition(ctx, currentUserID, strings.ToUpper(symbol), shares, price)
 			if err != nil {
 				return err
 			}
@@ -204,11 +207,11 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err != nil {
 				return err
 			}
-			if err := store.deletePosition(ctx, currentUserID, strings.ToUpper(symbol)); err != nil {
+			if err := store.DeletePosition(ctx, currentUserID, strings.ToUpper(symbol)); err != nil {
 				return err
 			}
 		case 15:
-			rows, err := store.listStocks(ctx)
+			rows, err := store.ListStocks(ctx)
 			if err != nil {
 				return err
 			}
@@ -222,7 +225,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err != nil {
 				return err
 			}
-			row, err := store.setStockPrice(ctx, strings.ToUpper(symbol), price)
+			row, err := store.SetStockPrice(ctx, strings.ToUpper(symbol), price)
 			if err != nil {
 				return err
 			}
@@ -240,7 +243,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 }
 
 func printPlayerSummary(ctx context.Context, store *adminStore, userID string) error {
-	row, err := store.playerByID(ctx, userID)
+	row, err := store.PlayerByID(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -362,6 +365,20 @@ func promptInt64(label string) (int64, error) {
 		return 0, fmt.Errorf("invalid integer: %w", err)
 	}
 	return value, nil
+}
+
+func promptPassword(label string) (string, error) {
+	fmt.Printf("%s: ", label)
+	raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+	if err != nil {
+		return "", err
+	}
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		return "", fmt.Errorf("%s is required", strings.ToLower(label))
+	}
+	return text, nil
 }
 
 func promptFloat(label string) (float64, error) {

@@ -4,13 +4,10 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 
 	"stanks/internal/game"
-
-	"golang.org/x/term"
 )
 
 func runSelectLoop(ctx context.Context, store *adminStore, userID string) error {
@@ -349,20 +346,6 @@ func promptRequired(label string) (string, error) {
 		return "", err
 	}
 	text = strings.TrimSpace(text)
-	if text == "" {
-		return "", fmt.Errorf("%s is required", strings.ToLower(label))
-	}
-	return text, nil
-}
-
-func promptPassword(label string) (string, error) {
-	fmt.Printf("%s: ", label)
-	raw, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Println()
-	if err != nil {
-		return "", err
-	}
-	text := strings.TrimSpace(string(raw))
 	if text == "" {
 		return "", fmt.Errorf("%s is required", strings.ToLower(label))
 	}

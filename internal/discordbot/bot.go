@@ -154,9 +154,9 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 	case "logout":
 		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleLogout(ctx, s, i) })
 	case "dashboard":
-		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleDashboard(ctx, s, i) })
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleDashboard(ctx, s, i) })
 	case "wallet":
-		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleWallet(ctx, s, i) })
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleWallet(ctx, s, i) })
 	case "portfolio":
 		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handlePortfolio(ctx, s, i) })
 	case "stocks":
@@ -170,29 +170,29 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 	case "fund-order":
 		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleFundOrder(ctx, s, i) })
 	case "business-create":
-		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleBusinessCreate(ctx, s, i) })
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleBusinessCreate(ctx, s, i) })
 	case "business":
-		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleBusiness(ctx, s, i) })
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleBusiness(ctx, s, i) })
 	case "candidates":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleCandidates(ctx, s, i) })
 	case "employees":
-		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleEmployees(ctx, s, i) })
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleEmployees(ctx, s, i) })
 	case "hire-many":
-		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleHireMany(ctx, s, i) })
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleHireMany(ctx, s, i) })
 	case "machinery":
-		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleMachinery(ctx, s, i) })
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleMachinery(ctx, s, i) })
 	case "loans":
-		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleLoans(ctx, s, i) })
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleLoans(ctx, s, i) })
 	case "strategy":
-		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleStrategy(ctx, s, i) })
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleStrategy(ctx, s, i) })
 	case "upgrades":
-		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleUpgrades(ctx, s, i) })
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleUpgrades(ctx, s, i) })
 	case "reserve":
-		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleReserve(ctx, s, i) })
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleReserve(ctx, s, i) })
 	case "ipo":
-		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleIPO(ctx, s, i) })
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleIPO(ctx, s, i) })
 	case "sell-business":
-		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleSellBusiness(ctx, s, i) })
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleSellBusiness(ctx, s, i) })
 	case "leaderboard":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleLeaderboard(ctx, s, i) })
 	case "friends":

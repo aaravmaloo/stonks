@@ -33,8 +33,8 @@ func NewEmbed() *EmbedBuilder {
 	}}
 }
 
-func (e *EmbedBuilder) Title(t string) *EmbedBuilder { e.embed.Title = t; return e }
-func (e *EmbedBuilder) Desc(d string) *EmbedBuilder  { e.embed.Description = d; return e }
+func (e *EmbedBuilder) Title(t string) *EmbedBuilder  { e.embed.Title = t; return e }
+func (e *EmbedBuilder) Desc(d string) *EmbedBuilder   { e.embed.Description = d; return e }
 func (e *EmbedBuilder) Color(c int) *EmbedBuilder     { e.embed.Color = c; return e }
 func (e *EmbedBuilder) Footer(f string) *EmbedBuilder { e.embed.Footer.Text = f; return e }
 func (e *EmbedBuilder) Thumbnail(url string) *EmbedBuilder {
@@ -209,4 +209,23 @@ func fieldsFromMap(raw map[string]any, mappings []fieldMapping) []*discordgo.Mes
 		fields = append(fields, &discordgo.MessageEmbedField{Name: m.Label, Value: text, Inline: true})
 	}
 	return fields
+}
+
+func int64FromMapKeys(raw map[string]any, keys ...string) (int64, bool) {
+	for _, key := range keys {
+		if value, ok := raw[key]; ok {
+			if out, ok := toInt64(value); ok {
+				return out, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func spendSummaryFields(spendMicros, feeMicros, balanceMicros int64) []*discordgo.MessageEmbedField {
+	return []*discordgo.MessageEmbedField{
+		{Name: "Amount To Spend", Value: fmtStonky(spendMicros), Inline: true},
+		{Name: "Fee", Value: fmtStonky(feeMicros), Inline: true},
+		{Name: "Remaining Balance", Value: fmtStonky(balanceMicros), Inline: true},
+	}
 }

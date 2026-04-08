@@ -193,9 +193,11 @@ func (b *Bot) handleHireMany(ctx context.Context, s *discordgo.Session, i *disco
 		{Key: "hired_count", Label: "Hired"},
 		{Key: "employee_count", Label: "Employee Count"},
 		{Key: "employee_slots_remaining", Label: "Slots Remaining"},
-		{Key: "total_cost_micros", Label: "Total Cost", Micros: true},
-		{Key: "new_balance_micros", Label: "New Balance", Micros: true},
 	})
+	if cost, ok := int64FromMapKeys(raw, "total_cost_micros"); ok {
+		balance, _ := int64FromMapKeys(raw, "new_balance_micros", "balance_micros", "remaining_balance_micros")
+		fields = append(fields, spendSummaryFields(cost, 0, balance)...)
+	}
 	if preview := stringSliceFromMap(raw, "hired_name_preview"); len(preview) > 0 {
 		description += "\n\nPreview:\n" + strings.Join(preview, "\n")
 	}
@@ -221,9 +223,12 @@ func (b *Bot) handleMachinery(ctx context.Context, s *discordgo.Session, i *disc
 		}
 		fields := fieldsFromMap(raw, []fieldMapping{
 			{Key: "machine_type", Label: "Type"},
-			{Key: "cost_micros", Label: "Cost", Micros: true},
-			{Key: "balance_micros", Label: "New Balance", Micros: true},
+			{Key: "new_level", Label: "New Level"},
 		})
+		if cost, ok := int64FromMapKeys(raw, "cost_micros"); ok {
+			balance, _ := int64FromMapKeys(raw, "new_balance_micros", "balance_micros")
+			fields = append(fields, spendSummaryFields(cost, 0, balance)...)
+		}
 		return b.respondEmbed(s, i, successEmbed("Machinery Purchased", fmt.Sprintf("Bought `%s` for business `%d`.", buyType, businessID), fields))
 	}
 
@@ -293,10 +298,12 @@ func (b *Bot) handleLoans(ctx context.Context, s *discordgo.Session, i *discordg
 			return b.respondAuthAwareError(ctx, s, i, err)
 		}
 		fields := fieldsFromMap(raw, []fieldMapping{
-			{Key: "repaid_micros", Label: "Repaid", Micros: true},
 			{Key: "outstanding_micros", Label: "Outstanding", Micros: true},
-			{Key: "balance_micros", Label: "New Balance", Micros: true},
 		})
+		if repaid, ok := int64FromMapKeys(raw, "repaid_micros"); ok {
+			balance, _ := int64FromMapKeys(raw, "balance_micros")
+			fields = append(fields, spendSummaryFields(repaid, 0, balance)...)
+		}
 		return b.respondEmbed(s, i, successEmbed("Loan Repaid", fmt.Sprintf("Repaid %s for business `%d`.", fmtStonky(amountMicros), businessID), fields))
 
 	default:
@@ -366,9 +373,11 @@ func (b *Bot) handleUpgrades(ctx context.Context, s *discordgo.Session, i *disco
 	fields := fieldsFromMap(raw, []fieldMapping{
 		{Key: "upgrade", Label: "Upgrade"},
 		{Key: "new_level", Label: "New Level"},
-		{Key: "cost_micros", Label: "Cost", Micros: true},
-		{Key: "balance_micros", Label: "New Balance", Micros: true},
 	})
+	if cost, ok := int64FromMapKeys(raw, "cost_micros"); ok {
+		balance, _ := int64FromMapKeys(raw, "balance_micros")
+		fields = append(fields, spendSummaryFields(cost, 0, balance)...)
+	}
 	return b.respondEmbed(s, i, successEmbed("Upgrade Purchased", fmt.Sprintf("Bought **%s** upgrade for business `%d`.", upgrade, businessID), fields))
 }
 

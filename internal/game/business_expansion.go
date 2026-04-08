@@ -163,13 +163,13 @@ func (s *Service) BuyBusinessMachinery(ctx context.Context, in BuyMachineryInput
 		return out, ErrUnauthorized
 	}
 
-	var balance, peak int64
+	var balance int64
 	if err := tx.QueryRow(ctx, `
-		SELECT balance_micros, peak_net_worth_micros
+		SELECT balance_micros
 		FROM game.wallets
 		WHERE user_id = $1 AND season_id = $2
 		FOR UPDATE
-	`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+	`, in.UserID, in.SeasonID).Scan(&balance); err != nil {
 		return out, err
 	}
 
@@ -188,7 +188,7 @@ func (s *Service) BuyBusinessMachinery(ctx context.Context, in BuyMachineryInput
 		nextLevel = level + 1
 	}
 	cost := int64(float64(spec.CostMicros) * (1 + 0.25*float64(nextLevel-1)))
-	if balance-cost < -DebtLimitFromPeak(peak) {
+	if !hasPositiveBalanceAfterSpend(balance, cost) {
 		return out, ErrInsufficientFunds
 	}
 
@@ -274,16 +274,16 @@ func (s *Service) TrainProfessional(ctx context.Context, in TrainProfessionalInp
 	}
 	cost := int64(math.Round(float64(curRevenue) * 1.8))
 
-	var balance, peak int64
+	var balance int64
 	if err := tx.QueryRow(ctx, `
-		SELECT balance_micros, peak_net_worth_micros
+		SELECT balance_micros
 		FROM game.wallets
 		WHERE user_id = $1 AND season_id = $2
 		FOR UPDATE
-	`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+	`, in.UserID, in.SeasonID).Scan(&balance); err != nil {
 		return out, err
 	}
-	if balance-cost < -DebtLimitFromPeak(peak) {
+	if !hasPositiveBalanceAfterSpend(balance, cost) {
 		return out, ErrInsufficientFunds
 	}
 
@@ -316,6 +316,7 @@ func (s *Service) TrainProfessional(ctx context.Context, in TrainProfessionalInp
 	out["ok"] = true
 	out["employee_id"] = in.EmployeeID
 	out["training_cost_micros"] = cost
+	out["balance_micros"] = balance
 	out["revenue_per_tick_micros"] = nextRevenue
 	out["risk_bps"] = nextRisk
 	return out, nil
@@ -441,7 +442,7 @@ func (s *Service) RepayBusinessLoan(ctx context.Context, in BusinessLoanInput) (
 	`, in.UserID, in.SeasonID).Scan(&balance); err != nil {
 		return out, err
 	}
-	if balance < in.AmountMicros {
+	if !hasPositiveBalanceAfterSpend(balance, in.AmountMicros) {
 		return out, ErrInsufficientFunds
 	}
 
@@ -651,16 +652,16 @@ func (s *Service) BuyBusinessUpgrade(ctx context.Context, in BusinessUpgradeInpu
 		level := int((seatCapacity - BaseBusinessEmployeeLimit) / SeatUpgradeIncrement)
 		cost := int64(math.Round(float64((1_800+level*700)*int(MicrosPerStonky)) * (1 + float64(level)*0.18)))
 
-		var balance, peak int64
+		var balance int64
 		if err := tx.QueryRow(ctx, `
-			SELECT balance_micros, peak_net_worth_micros
+			SELECT balance_micros
 			FROM game.wallets
 			WHERE user_id = $1 AND season_id = $2
 			FOR UPDATE
-		`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+		`, in.UserID, in.SeasonID).Scan(&balance); err != nil {
 			return out, err
 		}
-		if balance-cost < -DebtLimitFromPeak(peak) {
+		if !hasPositiveBalanceAfterSpend(balance, cost) {
 			return out, ErrInsufficientFunds
 		}
 		if _, err := tx.Exec(ctx, `
@@ -691,6 +692,7 @@ func (s *Service) BuyBusinessUpgrade(ctx context.Context, in BusinessUpgradeInpu
 		out["upgrade"] = upgrade
 		out["new_level"] = level + 1
 		out["cost_micros"] = cost
+		out["balance_micros"] = balance
 		out["employee_limit"] = seatCapacity + step
 		return out, nil
 	}
@@ -710,16 +712,16 @@ func (s *Service) BuyBusinessUpgrade(ctx context.Context, in BusinessUpgradeInpu
 	}
 	cost := int64(math.Round(float64((900+int(level)*350)*int(MicrosPerStonky)) * (1 + float64(level)*0.12)))
 
-	var balance, peak int64
+	var balance int64
 	if err := tx.QueryRow(ctx, `
-		SELECT balance_micros, peak_net_worth_micros
+		SELECT balance_micros
 		FROM game.wallets
 		WHERE user_id = $1 AND season_id = $2
 		FOR UPDATE
-	`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+	`, in.UserID, in.SeasonID).Scan(&balance); err != nil {
 		return out, err
 	}
-	if balance-cost < -DebtLimitFromPeak(peak) {
+	if !hasPositiveBalanceAfterSpend(balance, cost) {
 		return out, ErrInsufficientFunds
 	}
 	update := fmt.Sprintf(`
@@ -751,6 +753,7 @@ func (s *Service) BuyBusinessUpgrade(ctx context.Context, in BusinessUpgradeInpu
 	out["upgrade"] = upgrade
 	out["new_level"] = level + 1
 	out["cost_micros"] = cost
+	out["balance_micros"] = balance
 	return out, nil
 }
 
@@ -787,7 +790,7 @@ func (s *Service) BusinessReserveDeposit(ctx context.Context, in BusinessReserve
 	`, in.UserID, in.SeasonID).Scan(&balance); err != nil {
 		return err
 	}
-	if balance < in.AmountMicros {
+	if !hasPositiveBalanceAfterSpend(balance, in.AmountMicros) {
 		return ErrInsufficientFunds
 	}
 	if _, err := tx.Exec(ctx, `
@@ -1032,13 +1035,13 @@ func (s *Service) TradeFund(ctx context.Context, in FundOrderInput) (map[string]
 	}
 	fee := int64(math.Round(float64(notional) * 0.0010))
 
-	var balance, peak int64
+	var balance int64
 	if err := tx.QueryRow(ctx, `
-		SELECT balance_micros, peak_net_worth_micros
+		SELECT balance_micros
 		FROM game.wallets
 		WHERE user_id = $1 AND season_id = $2
 		FOR UPDATE
-	`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+	`, in.UserID, in.SeasonID).Scan(&balance); err != nil {
 		return out, err
 	}
 
@@ -1060,7 +1063,7 @@ func (s *Service) TradeFund(ctx context.Context, in FundOrderInput) (map[string]
 	switch in.Side {
 	case "buy":
 		next := balance - notional - fee
-		if next < -DebtLimitFromPeak(peak) {
+		if next <= 0 {
 			return out, ErrInsufficientFunds
 		}
 		newUnits := posUnits + in.Units

@@ -258,10 +258,11 @@ func (b *Bot) handleOrder(ctx context.Context, s *discordgo.Session, i *discordg
 	eb := NewEmbed().Title("Order Filled").Color(colorSuccess).
 		Desc(fmt.Sprintf("%s %.4f shares of `%s`.", strings.Title(side), shares, symbol)).
 		Field("Order ID", strconv.FormatInt(out.OrderID, 10), true).
-		Field("Price", fmtStonky(out.PriceMicros), true).
-		Field("Notional", fmtStonky(out.NotionalMicros), true).
-		Field("Fee", fmtStonky(out.FeeMicros), true).
-		Field("New Balance", fmtStonky(out.BalanceMicros), true)
+		Field("Price", fmtStonky(out.PriceMicros), true)
+
+	for _, field := range spendSummaryFields(out.NotionalMicros, out.FeeMicros, out.BalanceMicros) {
+		eb.Field(field.Name, field.Value, field.Inline)
+	}
 
 	return b.respondEmbed(s, i, eb.Build())
 }
@@ -327,13 +328,18 @@ func (b *Bot) handleFundOrder(ctx context.Context, s *discordgo.Session, i *disc
 		return b.respondAuthAwareError(ctx, s, i, err)
 	}
 
-	fields := fieldsFromMap(raw, []fieldMapping{
-		{Key: "fund_code", Label: "Fund"},
-		{Key: "units", Label: "Units"},
-		{Key: "nav_micros", Label: "NAV", Micros: true},
-		{Key: "total_cost_micros", Label: "Total Cost", Micros: true},
-		{Key: "balance_micros", Label: "New Balance", Micros: true},
-	})
+	fields := []*discordgo.MessageEmbedField{
+		{Name: "Fund", Value: fundCode, Inline: true},
+		{Name: "Units", Value: strconv.FormatInt(units, 10), Inline: true},
+	}
+	if nav, ok := int64FromMapKeys(raw, "nav_micros"); ok {
+		fields = append(fields, &discordgo.MessageEmbedField{Name: "NAV", Value: fmtStonky(nav), Inline: true})
+	}
+	if notional, ok := int64FromMapKeys(raw, "notional_micros"); ok {
+		fee, _ := int64FromMapKeys(raw, "fee_micros")
+		balance, _ := int64FromMapKeys(raw, "balance_micros")
+		fields = append(fields, spendSummaryFields(notional, fee, balance)...)
+	}
 
 	return b.respondEmbed(s, i, successEmbed("Fund Order Complete", fmt.Sprintf("%s %d units of `%s`.", strings.Title(side), units, fundCode), fields))
 }

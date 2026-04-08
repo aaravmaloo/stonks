@@ -29,7 +29,7 @@ var (
 	ErrInvalidSymbol        = errors.New("symbol must be exactly 6 uppercase letters")
 	ErrStockNotFound        = errors.New("stock not found")
 	ErrDuplicateIdempotency = errors.New("duplicate idempotency key")
-	ErrInsufficientFunds    = errors.New("insufficient funds")
+	ErrInsufficientFunds    = errors.New("not enough balance")
 	ErrInsufficientShares   = errors.New("insufficient shares")
 	ErrBusinessLocked       = errors.New("business feature locked: net worth below requirement")
 	ErrUnauthorized         = errors.New("unauthorized")
@@ -74,4 +74,11 @@ func DebtLimitFromPeak(peakNetWorthMicros int64) int64 {
 		return MaxDebtLimitMicros
 	}
 	return limit
+}
+
+func hasPositiveBalanceAfterSpend(balanceMicros, spendMicros int64) bool {
+	if spendMicros <= 0 {
+		return true
+	}
+	return balanceMicros-spendMicros > 0
 }

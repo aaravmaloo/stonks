@@ -665,23 +665,21 @@ func (s *Service) PlaceOrder(ctx context.Context, in OrderInput) (OrderResult, e
 			out.NotionalMicros = notional
 			out.FeeMicros = fee
 
-			var balance, peak int64
+			var balance int64
 			if err := tx.QueryRow(ctx, `
-				SELECT balance_micros, peak_net_worth_micros
+				SELECT balance_micros
 				FROM game.wallets
 				WHERE user_id = $1 AND season_id = $2
 				FOR UPDATE
-			`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+			`, in.UserID, in.SeasonID).Scan(&balance); err != nil {
 				return err
 			}
-			debtLimit := DebtLimitFromPeak(peak)
 
 			switch in.Side {
 			case "buy":
 				nextBalance := balance - notional - fee
-				if nextBalance < -debtLimit {
-					maxUnits, maxNotional, maxFee := maxAffordableBuy(out.PriceMicros, balance, debtLimit)
-					return fmt.Errorf("%w: max buy %.4f shares (notional %.2f + fee %.2f stonky)", ErrInsufficientFunds, UnitsToShares(maxUnits), MicrosToStonky(maxNotional), MicrosToStonky(maxFee))
+				if nextBalance <= 0 {
+					return ErrInsufficientFunds
 				}
 				if err := upsertBuyPosition(ctx, tx, in.UserID, in.SeasonID, stockID, in.QuantityUnits, out.PriceMicros); err != nil {
 					return err
@@ -897,16 +895,16 @@ func (s *Service) HireEmployee(ctx context.Context, in HireEmployeeInput) error 
 		return err
 	}
 
-	var balance, peak int64
+	var balance int64
 	if err := tx.QueryRow(ctx, `
-		SELECT balance_micros, peak_net_worth_micros
+		SELECT balance_micros
 		FROM game.wallets
 		WHERE user_id = $1 AND season_id = $2
 		FOR UPDATE
-	`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+	`, in.UserID, in.SeasonID).Scan(&balance); err != nil {
 		return err
 	}
-	if balance-cost < -DebtLimitFromPeak(peak) {
+	if !hasPositiveBalanceAfterSpend(balance, cost) {
 		return ErrInsufficientFunds
 	}
 
@@ -999,16 +997,16 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 				selectionLimit = remainingSlots
 			}
 
-			var balance, peak int64
+			var balance int64
 			if err := tx.QueryRow(ctx, `
-				SELECT balance_micros, peak_net_worth_micros
+				SELECT balance_micros
 				FROM game.wallets
 				WHERE user_id = $1 AND season_id = $2
 				FOR UPDATE
-			`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+			`, in.UserID, in.SeasonID).Scan(&balance); err != nil {
 				return err
 			}
-			shortlist, err := selectHireShortlistTx(ctx, tx, in.BusinessID, in.SeasonID, selectionLimit, orderBy, outerOrderBy, balance, peak)
+			shortlist, err := selectHireShortlistTx(ctx, tx, in.BusinessID, in.SeasonID, selectionLimit, orderBy, outerOrderBy, balance)
 			if err != nil {
 				return err
 			}
@@ -1157,16 +1155,16 @@ func (s *Service) QuoteHireEmployeesBulk(ctx context.Context, in BulkHireEmploye
 		selectionLimit = remainingSlots
 	}
 
-	var balance, peak int64
+	var balance int64
 	if err := tx.QueryRow(ctx, `
-		SELECT balance_micros, peak_net_worth_micros
+		SELECT balance_micros
 		FROM game.wallets
 		WHERE user_id = $1 AND season_id = $2
-	`, in.UserID, in.SeasonID).Scan(&balance, &peak); err != nil {
+	`, in.UserID, in.SeasonID).Scan(&balance); err != nil {
 		return out, err
 	}
 
-	shortlist, err := selectHireShortlistTx(ctx, tx, in.BusinessID, in.SeasonID, selectionLimit, orderBy, outerOrderBy, balance, peak)
+	shortlist, err := selectHireShortlistTx(ctx, tx, in.BusinessID, in.SeasonID, selectionLimit, orderBy, outerOrderBy, balance)
 	if err != nil {
 		return out, err
 	}
@@ -1191,7 +1189,7 @@ func (s *Service) QuoteHireEmployeesBulk(ctx context.Context, in BulkHireEmploye
 		"estimated_hire_count":     len(shortlist),
 		"estimated_cost_micros":    estimatedCost,
 		"balance_micros":           balance,
-		"remaining_balance_micros": balance - estimatedCost,
+		"remaining_balance_micros": max64(balance-estimatedCost, 0),
 		"employee_limit":           employeeLimit,
 		"employee_count":           currentEmployees,
 		"employee_slots_remaining": employeeLimit - currentEmployees,
@@ -1216,7 +1214,7 @@ type hirePick struct {
 	Risk    int32
 }
 
-func selectHireShortlistTx(ctx context.Context, tx pgx.Tx, businessID, seasonID int64, selectionLimit int, orderBy, outerOrderBy string, balance, peak int64) ([]hirePick, error) {
+func selectHireShortlistTx(ctx context.Context, tx pgx.Tx, businessID, seasonID int64, selectionLimit int, orderBy, outerOrderBy string, balance int64) ([]hirePick, error) {
 	rows, err := tx.Query(ctx, `
 		WITH ranked AS (
 			SELECT ec.id, ec.full_name, ec.role, ec.trait, ec.hire_cost_micros, ec.revenue_per_tick_micros, ec.risk_bps,
@@ -1233,9 +1231,9 @@ func selectHireShortlistTx(ctx context.Context, tx pgx.Tx, businessID, seasonID 
 		)
 		SELECT id, full_name, role, trait, hire_cost_micros, revenue_per_tick_micros, risk_bps
 		FROM ranked
-		WHERE $4 - running_cost >= $5
+		WHERE $4 - running_cost > $5
 		ORDER BY `+outerOrderBy+`
-	`, businessID, seasonID, selectionLimit, balance, -DebtLimitFromPeak(peak))
+	`, businessID, seasonID, selectionLimit, balance, 0)
 	if err != nil {
 		return nil, err
 	}

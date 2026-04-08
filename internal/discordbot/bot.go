@@ -152,51 +152,51 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 	case "login":
 		err = b.openAuthModal(s, i, loginModalID, "Log Into Stanks", false)
 	case "logout":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleLogout(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleLogout(ctx, s, i) })
 	case "dashboard":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleDashboard(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleDashboard(ctx, s, i) })
 	case "wallet":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleWallet(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleWallet(ctx, s, i) })
 	case "portfolio":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handlePortfolio(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handlePortfolio(ctx, s, i) })
 	case "stocks":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleStocks(ctx, s, i) })
 	case "stock":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleStock(ctx, s, i) })
 	case "order":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleOrder(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleOrder(ctx, s, i) })
 	case "funds":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleFunds(ctx, s, i) })
 	case "fund-order":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleFundOrder(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleFundOrder(ctx, s, i) })
 	case "business-create":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleBusinessCreate(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleBusinessCreate(ctx, s, i) })
 	case "business":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleBusiness(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleBusiness(ctx, s, i) })
 	case "candidates":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleCandidates(ctx, s, i) })
 	case "employees":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleEmployees(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleEmployees(ctx, s, i) })
 	case "hire-many":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleHireMany(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleHireMany(ctx, s, i) })
 	case "machinery":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleMachinery(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleMachinery(ctx, s, i) })
 	case "loans":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleLoans(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleLoans(ctx, s, i) })
 	case "strategy":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleStrategy(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleStrategy(ctx, s, i) })
 	case "upgrades":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleUpgrades(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleUpgrades(ctx, s, i) })
 	case "reserve":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleReserve(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleReserve(ctx, s, i) })
 	case "ipo":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleIPO(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleIPO(ctx, s, i) })
 	case "sell-business":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleSellBusiness(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleSellBusiness(ctx, s, i) })
 	case "leaderboard":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleLeaderboard(ctx, s, i) })
 	case "friends":
-		err = b.runDeferred(ctx, s, i, func() error { return b.handleFriends(ctx, s, i) })
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleFriends(ctx, s, i) })
 	default:
 		err = b.respondImmediateError(s, i, "Unknown command.")
 	}
@@ -211,7 +211,7 @@ func (b *Bot) handleModal(s *discordgo.Session, i *discordgo.InteractionCreate) 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := b.beginDeferredResponse(s, i); err != nil {
+	if err := b.beginDeferredResponse(s, i, true); err != nil {
 		b.log.Error("discord modal defer failed", "custom_id", data.CustomID, "err", err)
 		return
 	}
@@ -241,7 +241,7 @@ func (b *Bot) handleComponent(s *discordgo.Session, i *discordgo.InteractionCrea
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := b.beginDeferredResponse(s, i); err != nil {
+	if err := b.beginDeferredResponse(s, i, false); err != nil {
 		b.log.Error("discord component defer failed", "custom_id", data.CustomID, "err", err)
 		return
 	}
@@ -573,23 +573,32 @@ func (b *Bot) respondAuthAwareError(ctx context.Context, s *discordgo.Session, i
 }
 
 func (b *Bot) runDeferred(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, fn func() error) error {
-	if err := b.beginDeferredResponse(s, i); err != nil {
+	if err := b.beginDeferredResponse(s, i, false); err != nil {
 		return err
 	}
 	return fn()
 }
 
-func (b *Bot) beginDeferredResponse(s *discordgo.Session, i *discordgo.InteractionCreate) error {
+func (b *Bot) runDeferredPrivate(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, fn func() error) error {
+	if err := b.beginDeferredResponse(s, i, true); err != nil {
+		return err
+	}
+	return fn()
+}
+
+func (b *Bot) beginDeferredResponse(s *discordgo.Session, i *discordgo.InteractionCreate, ephemeral bool) error {
 	if i.Type == discordgo.InteractionMessageComponent {
 		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseDeferredMessageUpdate,
 		})
 	}
+	data := &discordgo.InteractionResponseData{}
+	if ephemeral {
+		data.Flags = discordgo.MessageFlagsEphemeral
+	}
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Flags: discordgo.MessageFlagsEphemeral,
-		},
+		Data: data,
 	})
 }
 

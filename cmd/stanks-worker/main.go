@@ -48,6 +48,10 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	if err := svc.ClampNegativeBalances(ctx, seasonID); err != nil {
+		logger.Error("balance clamp failed", "err", err)
+		os.Exit(1)
+	}
 
 	runOnce := strings.EqualFold(strings.TrimSpace(os.Getenv("STANKS_WORKER_RUN_ONCE")), "true")
 	if runOnce {

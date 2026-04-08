@@ -178,6 +178,16 @@ func (s *Service) SeedDefaults(ctx context.Context, seasonID int64) error {
 	return tx.Commit(ctx)
 }
 
+func (s *Service) ClampNegativeBalances(ctx context.Context, seasonID int64) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE game.wallets
+		SET balance_micros = 0,
+		    updated_at = now()
+		WHERE season_id = $1 AND balance_micros < 0
+	`, seasonID)
+	return err
+}
+
 type businessCycle struct {
 	businessID       int64
 	userID           string
@@ -1750,6 +1760,9 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 	if err := appendGeneratedStocksTx(ctx, tx, seasonID, newStocksPerTick, s.nextFloat); err != nil {
 		return err
 	}
+	if err := clampNegativeBalancesTx(ctx, tx, seasonID); err != nil {
+		return err
+	}
 	if err := updateSeasonPeakNetWorthTx(ctx, tx, seasonID); err != nil {
 		return err
 	}
@@ -2006,6 +2019,16 @@ func applyDebtInterestTx(ctx context.Context, tx pgx.Tx, seasonID int64, tickEve
 		}
 	}
 	return nil
+}
+
+func clampNegativeBalancesTx(ctx context.Context, tx pgx.Tx, seasonID int64) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE game.wallets
+		SET balance_micros = 0,
+		    updated_at = now()
+		WHERE season_id = $1 AND balance_micros < 0
+	`, seasonID)
+	return err
 }
 
 func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, nextFloat func() float64) error {

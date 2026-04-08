@@ -52,6 +52,10 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	if err := gameSvc.ClampNegativeBalances(ctx, seasonID); err != nil {
+		logger.Error("balance clamp failed", "err", err)
+		os.Exit(1)
+	}
 
 	server := api.New(cfg, logger, authClient, gameSvc)
 	httpServer := &http.Server{

@@ -580,6 +580,11 @@ func (b *Bot) runDeferred(ctx context.Context, s *discordgo.Session, i *discordg
 }
 
 func (b *Bot) beginDeferredResponse(s *discordgo.Session, i *discordgo.InteractionCreate) error {
+	if i.Type == discordgo.InteractionMessageComponent {
+		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseDeferredMessageUpdate,
+		})
+	}
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{

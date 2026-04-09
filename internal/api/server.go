@@ -83,6 +83,7 @@ func (s *Server) routes() {
 			r.Get("/wallet", s.handleWallet)
 			r.Get("/world", s.handleWorld)
 			r.Get("/stakes", s.handleStakes)
+			r.Post("/transfer", s.handleTransferStonky)
 			r.Get("/stocks", s.handleStocksList)
 			r.Get("/stocks/{symbol}", s.handleStockDetail)
 			r.Post("/orders", s.handleOrder)
@@ -108,6 +109,7 @@ func (s *Server) routes() {
 			r.Post("/businesses/{id}/ipo", s.handleBusinessIPO)
 			r.Post("/businesses/{id}/sell", s.handleSellBusiness)
 			r.Post("/businesses/{id}/stakes/give", s.handleTransferBusinessStake)
+			r.Post("/businesses/{id}/stakes/revoke", s.handleRevokeBusinessStake)
 
 			r.Post("/stocks/custom", s.handleCreateCustomStock)
 			r.Post("/stocks/{symbol}/ipo", s.handleIPOStock)
@@ -320,6 +322,39 @@ func (s *Server) handleStakes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"stakes": out})
+}
+
+func (s *Server) handleTransferStonky(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var in struct {
+		Username     string `json:"username"`
+		AmountMicros int64  `json:"amount_micros"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.game.TransferStonky(r.Context(), game.WalletTransferInput{
+		UserID:            user.UserID,
+		SeasonID:          seasonID,
+		RecipientUsername: in.Username,
+		AmountMicros:      in.AmountMicros,
+		IdempotencyKey:    idempotencyKey(r),
+	})
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleStocksList(w http.ResponseWriter, r *http.Request) {
@@ -1052,6 +1087,45 @@ func (s *Server) handleTransferBusinessStake(w http.ResponseWriter, r *http.Requ
 		RecipientUsername: in.Username,
 		StakeBps:          in.StakeBps,
 		IdempotencyKey:    idempotencyKey(r),
+	})
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleRevokeBusinessStake(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	var in struct {
+		Username string `json:"username"`
+		StakeBps int32  `json:"stake_bps"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.game.RevokeBusinessStake(r.Context(), game.RevokeBusinessStakeInput{
+		UserID:         user.UserID,
+		SeasonID:       seasonID,
+		BusinessID:     businessID,
+		TargetUsername: in.Username,
+		StakeBps:       in.StakeBps,
+		IdempotencyKey: idempotencyKey(r),
 	})
 	if err != nil {
 		writeDomainError(w, err)

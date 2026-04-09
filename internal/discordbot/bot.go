@@ -163,6 +163,8 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleWorld(ctx, s, i) })
 	case "wallet":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleWallet(ctx, s, i) })
+	case "transfer":
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleTransfer(ctx, s, i) })
 	case "portfolio":
 		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handlePortfolio(ctx, s, i) })
 	case "stocks":
@@ -203,6 +205,8 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleStakes(ctx, s, i) })
 	case "give-stake":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleGiveStake(ctx, s, i) })
+	case "revoke-stakes":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleRevokeStake(ctx, s, i) })
 	case "leaderboard":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleLeaderboard(ctx, s, i) })
 	case "friends":

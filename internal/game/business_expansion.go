@@ -1209,6 +1209,229 @@ func (s *Service) TransferBusinessStake(ctx context.Context, in TransferBusiness
 	return out, nil
 }
 
+func (s *Service) RevokeBusinessStake(ctx context.Context, in RevokeBusinessStakeInput) (map[string]any, error) {
+	out := map[string]any{}
+	if in.StakeBps <= 0 {
+		return out, fmt.Errorf("stake percent must be > 0")
+	}
+	if in.StakeBps >= 10000 {
+		return out, fmt.Errorf("cannot revoke 100%% or more")
+	}
+	in.TargetUsername = strings.ToLower(strings.TrimSpace(in.TargetUsername))
+	if in.TargetUsername == "" {
+		return out, fmt.Errorf("target username is required")
+	}
+
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return out, err
+	}
+	defer tx.Rollback(ctx)
+	if err := claimIdempotency(ctx, tx, in.UserID, in.IdempotencyKey, "revoke_business_stake"); err != nil {
+		return out, err
+	}
+
+	var ownerUserID string
+	if err := tx.QueryRow(ctx, `
+		SELECT owner_user_id
+		FROM game.businesses
+		WHERE id = $1 AND season_id = $2
+		FOR UPDATE
+	`, in.BusinessID, in.SeasonID).Scan(&ownerUserID); err != nil {
+		return out, err
+	}
+	if ownerUserID != in.UserID {
+		return out, ErrUnauthorized
+	}
+
+	var targetUserID string
+	if err := tx.QueryRow(ctx, `
+		SELECT user_id
+		FROM users.profiles
+		WHERE LOWER(username) = $1
+	`, in.TargetUsername).Scan(&targetUserID); err != nil {
+		return out, fmt.Errorf("target username not found")
+	}
+	if targetUserID == in.UserID {
+		return out, fmt.Errorf("cannot revoke stake from yourself")
+	}
+
+	var targetStakeBps int32
+	var targetBasis int64
+	if err := tx.QueryRow(ctx, `
+		SELECT stake_bps, cost_basis_micros
+		FROM game.business_stakes
+		WHERE business_id = $1 AND season_id = $2 AND user_id = $3
+		FOR UPDATE
+	`, in.BusinessID, in.SeasonID, targetUserID).Scan(&targetStakeBps, &targetBasis); err != nil {
+		return out, err
+	}
+	if targetStakeBps < in.StakeBps {
+		return out, fmt.Errorf("target does not own that much stake")
+	}
+
+	ownerBasisGain := int64(math.Round(float64(targetBasis) * float64(in.StakeBps) / float64(targetStakeBps)))
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE game.business_stakes
+		SET stake_bps = stake_bps - $1,
+		    cost_basis_micros = GREATEST(0, cost_basis_micros - $2),
+		    updated_at = now()
+		WHERE business_id = $3 AND season_id = $4 AND user_id = $5
+	`, in.StakeBps, ownerBasisGain, in.BusinessID, in.SeasonID, targetUserID); err != nil {
+		return out, err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM game.business_stakes
+		WHERE business_id = $1 AND season_id = $2 AND user_id = $3 AND stake_bps <= 0
+	`, in.BusinessID, in.SeasonID, targetUserID); err != nil {
+		return out, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE game.business_stakes
+		SET stake_bps = stake_bps + $1,
+		    cost_basis_micros = cost_basis_micros + $2,
+		    updated_at = now()
+		WHERE business_id = $3 AND season_id = $4 AND user_id = $5
+	`, in.StakeBps, ownerBasisGain, in.BusinessID, in.SeasonID, in.UserID); err != nil {
+		return out, err
+	}
+
+	cycles, err := loadBusinessCyclesTx(ctx, tx, in.SeasonID, "", &in.BusinessID)
+	if err != nil {
+		return out, err
+	}
+	if len(cycles) == 0 {
+		return out, fmt.Errorf("business not found")
+	}
+	valueNow := estimateBusinessValuationMicros(cycles[0], projectBusinessCycle(cycles[0]))
+	revokedValue := int64(math.Round(float64(valueNow) * float64(in.StakeBps) / 10000.0))
+
+	if err := tx.Commit(ctx); err != nil {
+		return out, err
+	}
+	out["ok"] = true
+	out["business_id"] = in.BusinessID
+	out["target_username"] = in.TargetUsername
+	out["stake_bps"] = in.StakeBps
+	out["estimated_value_micros"] = revokedValue
+	return out, nil
+}
+
+func (s *Service) TransferStonky(ctx context.Context, in WalletTransferInput) (map[string]any, error) {
+	out := map[string]any{}
+	if in.AmountMicros <= 0 {
+		return out, fmt.Errorf("amount must be > 0")
+	}
+	in.RecipientUsername = strings.ToLower(strings.TrimSpace(in.RecipientUsername))
+	if in.RecipientUsername == "" {
+		return out, fmt.Errorf("recipient username is required")
+	}
+
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return out, err
+	}
+	defer tx.Rollback(ctx)
+	if err := claimIdempotency(ctx, tx, in.UserID, in.IdempotencyKey, "wallet_transfer"); err != nil {
+		return out, err
+	}
+
+	var recipientUserID string
+	if err := tx.QueryRow(ctx, `
+		SELECT user_id
+		FROM users.profiles
+		WHERE LOWER(username) = $1
+	`, in.RecipientUsername).Scan(&recipientUserID); err != nil {
+		return out, fmt.Errorf("recipient username not found")
+	}
+	if recipientUserID == in.UserID {
+		return out, fmt.Errorf("cannot transfer stonky to yourself")
+	}
+
+	var senderBalance int64
+	if err := tx.QueryRow(ctx, `
+		SELECT balance_micros
+		FROM game.wallets
+		WHERE user_id = $1 AND season_id = $2
+		FOR UPDATE
+	`, in.UserID, in.SeasonID).Scan(&senderBalance); err != nil {
+		return out, err
+	}
+	if senderBalance < in.AmountMicros {
+		return out, ErrInsufficientFunds
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO game.wallets (user_id, season_id, balance_micros, peak_net_worth_micros)
+		VALUES ($1, $2, 0, 0)
+		ON CONFLICT (user_id, season_id) DO NOTHING
+	`, recipientUserID, in.SeasonID); err != nil {
+		return out, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE game.wallets
+		SET balance_micros = balance_micros - $1,
+		    updated_at = now()
+		WHERE user_id = $2 AND season_id = $3
+	`, in.AmountMicros, in.UserID, in.SeasonID); err != nil {
+		return out, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE game.wallets
+		SET balance_micros = balance_micros + $1,
+		    peak_net_worth_micros = GREATEST(peak_net_worth_micros, balance_micros + $1),
+		    updated_at = now()
+		WHERE user_id = $2 AND season_id = $3
+	`, in.AmountMicros, recipientUserID, in.SeasonID); err != nil {
+		return out, err
+	}
+
+	txID := uuid.NewString()
+	meta, _ := json.Marshal(map[string]any{
+		"action":             "wallet_transfer",
+		"recipient_username": in.RecipientUsername,
+	})
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO game.ledger_entries (tx_group_id, user_id, season_id, account, delta_micros, metadata)
+		VALUES
+		($1, $2, $3, 'wallet', -$4, $5::jsonb),
+		($1, $2, $3, 'counterparty', $4, $5::jsonb)
+	`, txID, in.UserID, in.SeasonID, in.AmountMicros, string(meta)); err != nil {
+		return out, err
+	}
+	meta, _ = json.Marshal(map[string]any{
+		"action":          "wallet_receive",
+		"sender_user_id":  in.UserID,
+		"sender_username": "",
+	})
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO game.ledger_entries (tx_group_id, user_id, season_id, account, delta_micros, metadata)
+		VALUES
+		($1, $2, $3, 'wallet', $4, $5::jsonb),
+		($1, $2, $3, 'counterparty', -$4, $5::jsonb)
+	`, txID, recipientUserID, in.SeasonID, in.AmountMicros, string(meta)); err != nil {
+		return out, err
+	}
+
+	var newSenderBalance int64
+	if err := tx.QueryRow(ctx, `
+		SELECT balance_micros
+		FROM game.wallets
+		WHERE user_id = $1 AND season_id = $2
+	`, in.UserID, in.SeasonID).Scan(&newSenderBalance); err != nil {
+		return out, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return out, err
+	}
+
+	out["ok"] = true
+	out["recipient_username"] = in.RecipientUsername
+	out["amount_micros"] = in.AmountMicros
+	out["balance_micros"] = newSenderBalance
+	return out, nil
+}
+
 func (s *Service) ListFunds(ctx context.Context, seasonID int64) ([]map[string]any, error) {
 	navs, err := s.fundNAVs(ctx, seasonID)
 	if err != nil {

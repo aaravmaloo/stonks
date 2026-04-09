@@ -17,21 +17,29 @@ type Service struct {
 }
 
 type Player struct {
-	UserID             string `json:"user_id"`
-	Email              string `json:"email"`
-	Username           string `json:"username"`
-	InviteCode         string `json:"invite_code"`
-	BalanceMicros      int64  `json:"balance_micros"`
-	PeakNetWorthMicros int64  `json:"peak_net_worth_micros"`
-	ActiveBusinessID   *int64 `json:"active_business_id,omitempty"`
+	UserID              string `json:"user_id"`
+	Email               string `json:"email"`
+	Username            string `json:"username"`
+	InviteCode          string `json:"invite_code"`
+	BalanceMicros       int64  `json:"balance_micros"`
+	PeakNetWorthMicros  int64  `json:"peak_net_worth_micros"`
+	ActiveBusinessID    *int64 `json:"active_business_id,omitempty"`
+	ReputationScore     int32  `json:"reputation_score"`
+	CurrentProfitStreak int32  `json:"current_profit_streak"`
+	BestProfitStreak    int32  `json:"best_profit_streak"`
+	RiskAppetiteBps     int32  `json:"risk_appetite_bps"`
 }
 
 type Business struct {
-	ID                int64  `json:"id"`
-	Name              string `json:"name"`
-	Visibility        string `json:"visibility"`
-	IsListed          bool   `json:"is_listed"`
-	BaseRevenueMicros int64  `json:"base_revenue_micros"`
+	ID                   int64  `json:"id"`
+	Name                 string `json:"name"`
+	Visibility           string `json:"visibility"`
+	IsListed             bool   `json:"is_listed"`
+	BaseRevenueMicros    int64  `json:"base_revenue_micros"`
+	PrimaryRegion        string `json:"primary_region"`
+	NarrativeArc         string `json:"narrative_arc"`
+	NarrativeFocus       string `json:"narrative_focus"`
+	NarrativePressureBps int32  `json:"narrative_pressure_bps"`
 }
 
 type Position struct {
@@ -47,6 +55,28 @@ type Stock struct {
 	CurrentPriceMicros int64  `json:"current_price_micros"`
 	AnchorPriceMicros  int64  `json:"anchor_price_micros"`
 	ListedPublic       bool   `json:"listed_public"`
+}
+
+type Stake struct {
+	BusinessID      int64  `json:"business_id"`
+	UserID          string `json:"user_id"`
+	Username        string `json:"username"`
+	StakeBps        int32  `json:"stake_bps"`
+	CostBasisMicros int64  `json:"cost_basis_micros"`
+}
+
+type WorldState struct {
+	Regime                 string `json:"regime"`
+	PoliticalClimate       string `json:"political_climate"`
+	PolicyFocus            string `json:"policy_focus"`
+	CatalystName           string `json:"catalyst_name"`
+	CatalystSummary        string `json:"catalyst_summary"`
+	CatalystTicksRemaining int32  `json:"catalyst_ticks_remaining"`
+	Headline               string `json:"headline"`
+	AmericasBps            int32  `json:"americas_bps"`
+	EuropeBps              int32  `json:"europe_bps"`
+	AsiaBps                int32  `json:"asia_bps"`
+	RiskRewardBiasBps      int32  `json:"risk_reward_bias_bps"`
 }
 
 func NewService(db *pgxpool.Pool) *Service {
@@ -84,10 +114,16 @@ func (s *Service) ListPlayers(ctx context.Context, query string) ([]Player, erro
 		SELECT p.user_id, p.email, p.username, p.invite_code,
 		       COALESCE(w.balance_micros, 0),
 		       COALESCE(w.peak_net_worth_micros, 0),
-		       w.active_business_id
+		       w.active_business_id,
+		       COALESCE(pp.reputation_score, 5000),
+		       COALESCE(pp.current_profit_streak, 0),
+		       COALESCE(pp.best_profit_streak, 0),
+		       COALESCE(pp.risk_appetite_bps, 0)
 		FROM users.profiles p
 		LEFT JOIN game.wallets w
 		  ON w.user_id = p.user_id AND w.season_id = $1
+		LEFT JOIN game.player_progress pp
+		  ON pp.user_id = p.user_id AND pp.season_id = $1
 		WHERE $2 = '%'
 		   OR p.user_id ILIKE $2
 		   OR p.email ILIKE $2
@@ -112,6 +148,10 @@ func (s *Service) ListPlayers(ctx context.Context, query string) ([]Player, erro
 			&row.BalanceMicros,
 			&row.PeakNetWorthMicros,
 			&row.ActiveBusinessID,
+			&row.ReputationScore,
+			&row.CurrentProfitStreak,
+			&row.BestProfitStreak,
+			&row.RiskAppetiteBps,
 		); err != nil {
 			return nil, err
 		}
@@ -130,10 +170,16 @@ func (s *Service) PlayerByID(ctx context.Context, userID string) (Player, error)
 		SELECT p.user_id, p.email, p.username, p.invite_code,
 		       COALESCE(w.balance_micros, 0),
 		       COALESCE(w.peak_net_worth_micros, 0),
-		       w.active_business_id
+		       w.active_business_id,
+		       COALESCE(pp.reputation_score, 5000),
+		       COALESCE(pp.current_profit_streak, 0),
+		       COALESCE(pp.best_profit_streak, 0),
+		       COALESCE(pp.risk_appetite_bps, 0)
 		FROM users.profiles p
 		LEFT JOIN game.wallets w
 		  ON w.user_id = p.user_id AND w.season_id = $2
+		LEFT JOIN game.player_progress pp
+		  ON pp.user_id = p.user_id AND pp.season_id = $2
 		WHERE p.user_id = $1
 	`, strings.TrimSpace(userID), seasonID).Scan(
 		&row.UserID,
@@ -143,6 +189,10 @@ func (s *Service) PlayerByID(ctx context.Context, userID string) (Player, error)
 		&row.BalanceMicros,
 		&row.PeakNetWorthMicros,
 		&row.ActiveBusinessID,
+		&row.ReputationScore,
+		&row.CurrentProfitStreak,
+		&row.BestProfitStreak,
+		&row.RiskAppetiteBps,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -174,6 +224,15 @@ func (s *Service) ensureWallet(ctx context.Context, tx pgx.Tx, userID string, se
 		}
 	}
 	return nil
+}
+
+func (s *Service) ensurePlayerProgress(ctx context.Context, tx pgx.Tx, userID string, seasonID int64) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO game.player_progress (user_id, season_id)
+		VALUES ($1, $2)
+		ON CONFLICT (user_id, season_id) DO NOTHING
+	`, userID, seasonID)
+	return err
 }
 
 func (s *Service) ChangeBalance(ctx context.Context, userID string, deltaMicros int64) (Player, error) {
@@ -349,7 +408,7 @@ func (s *Service) ListBusinessesByUser(ctx context.Context, userID string) ([]Bu
 		return nil, err
 	}
 	rows, err := s.db.Query(ctx, `
-		SELECT id, name, visibility, is_listed, base_revenue_micros
+		SELECT id, name, visibility, is_listed, base_revenue_micros, primary_region, narrative_arc, narrative_focus, narrative_pressure_bps
 		FROM game.businesses
 		WHERE owner_user_id = $1 AND season_id = $2
 		ORDER BY id
@@ -362,7 +421,7 @@ func (s *Service) ListBusinessesByUser(ctx context.Context, userID string) ([]Bu
 	var out []Business
 	for rows.Next() {
 		var row Business
-		if err := rows.Scan(&row.ID, &row.Name, &row.Visibility, &row.IsListed, &row.BaseRevenueMicros); err != nil {
+		if err := rows.Scan(&row.ID, &row.Name, &row.Visibility, &row.IsListed, &row.BaseRevenueMicros, &row.PrimaryRegion, &row.NarrativeArc, &row.NarrativeFocus, &row.NarrativePressureBps); err != nil {
 			return nil, err
 		}
 		out = append(out, row)
@@ -376,8 +435,8 @@ func (s *Service) SetBusinessName(ctx context.Context, businessID int64, name st
 		UPDATE game.businesses
 		SET name = $2, updated_at = now()
 		WHERE id = $1
-		RETURNING id, name, visibility, is_listed, base_revenue_micros
-	`, businessID, strings.TrimSpace(name)).Scan(&row.ID, &row.Name, &row.Visibility, &row.IsListed, &row.BaseRevenueMicros)
+		RETURNING id, name, visibility, is_listed, base_revenue_micros, primary_region, narrative_arc, narrative_focus, narrative_pressure_bps
+	`, businessID, strings.TrimSpace(name)).Scan(&row.ID, &row.Name, &row.Visibility, &row.IsListed, &row.BaseRevenueMicros, &row.PrimaryRegion, &row.NarrativeArc, &row.NarrativeFocus, &row.NarrativePressureBps)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return Business{}, fmt.Errorf("business %d not found", businessID)
@@ -396,8 +455,8 @@ func (s *Service) SetBusinessVisibility(ctx context.Context, businessID int64, v
 		UPDATE game.businesses
 		SET visibility = $2, updated_at = now()
 		WHERE id = $1
-		RETURNING id, name, visibility, is_listed, base_revenue_micros
-	`, businessID, visibility).Scan(&row.ID, &row.Name, &row.Visibility, &row.IsListed, &row.BaseRevenueMicros)
+		RETURNING id, name, visibility, is_listed, base_revenue_micros, primary_region, narrative_arc, narrative_focus, narrative_pressure_bps
+	`, businessID, visibility).Scan(&row.ID, &row.Name, &row.Visibility, &row.IsListed, &row.BaseRevenueMicros, &row.PrimaryRegion, &row.NarrativeArc, &row.NarrativeFocus, &row.NarrativePressureBps)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return Business{}, fmt.Errorf("business %d not found", businessID)
@@ -413,8 +472,8 @@ func (s *Service) SetBusinessListed(ctx context.Context, businessID int64, liste
 		UPDATE game.businesses
 		SET is_listed = $2, updated_at = now()
 		WHERE id = $1
-		RETURNING id, name, visibility, is_listed, base_revenue_micros
-	`, businessID, listed).Scan(&row.ID, &row.Name, &row.Visibility, &row.IsListed, &row.BaseRevenueMicros)
+		RETURNING id, name, visibility, is_listed, base_revenue_micros, primary_region, narrative_arc, narrative_focus, narrative_pressure_bps
+	`, businessID, listed).Scan(&row.ID, &row.Name, &row.Visibility, &row.IsListed, &row.BaseRevenueMicros, &row.PrimaryRegion, &row.NarrativeArc, &row.NarrativeFocus, &row.NarrativePressureBps)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return Business{}, fmt.Errorf("business %d not found", businessID)
@@ -430,8 +489,8 @@ func (s *Service) SetBusinessRevenue(ctx context.Context, businessID int64, amou
 		UPDATE game.businesses
 		SET base_revenue_micros = $2, updated_at = now()
 		WHERE id = $1
-		RETURNING id, name, visibility, is_listed, base_revenue_micros
-	`, businessID, amountMicros).Scan(&row.ID, &row.Name, &row.Visibility, &row.IsListed, &row.BaseRevenueMicros)
+		RETURNING id, name, visibility, is_listed, base_revenue_micros, primary_region, narrative_arc, narrative_focus, narrative_pressure_bps
+	`, businessID, amountMicros).Scan(&row.ID, &row.Name, &row.Visibility, &row.IsListed, &row.BaseRevenueMicros, &row.PrimaryRegion, &row.NarrativeArc, &row.NarrativeFocus, &row.NarrativePressureBps)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return Business{}, fmt.Errorf("business %d not found", businessID)
@@ -450,6 +509,242 @@ func (s *Service) DeleteBusiness(ctx context.Context, businessID int64) error {
 		return fmt.Errorf("business %d not found", businessID)
 	}
 	return nil
+}
+
+func (s *Service) SetPlayerProgress(ctx context.Context, userID string, reputationScore, currentStreak, bestStreak, riskAppetiteBps int32) (Player, error) {
+	seasonID, err := s.ActiveSeasonID(ctx)
+	if err != nil {
+		return Player{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Player{}, err
+	}
+	defer tx.Rollback(ctx)
+	userID = strings.TrimSpace(userID)
+	if err := s.ensureWallet(ctx, tx, userID, seasonID); err != nil {
+		return Player{}, err
+	}
+	if err := s.ensurePlayerProgress(ctx, tx, userID, seasonID); err != nil {
+		return Player{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE game.player_progress
+		SET reputation_score = $3,
+		    current_profit_streak = $4,
+		    best_profit_streak = $5,
+		    risk_appetite_bps = $6,
+		    updated_at = now()
+		WHERE user_id = $1 AND season_id = $2
+	`, userID, seasonID, reputationScore, currentStreak, bestStreak, riskAppetiteBps); err != nil {
+		return Player{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Player{}, err
+	}
+	return s.PlayerByID(ctx, userID)
+}
+
+func (s *Service) ListBusinessStakes(ctx context.Context, businessID int64) ([]Stake, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT s.business_id, s.user_id, p.username, s.stake_bps, s.cost_basis_micros
+		FROM game.business_stakes s
+		JOIN users.profiles p ON p.user_id = s.user_id
+		WHERE s.business_id = $1
+		ORDER BY s.stake_bps DESC, p.username
+	`, businessID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Stake
+	for rows.Next() {
+		var row Stake
+		if err := rows.Scan(&row.BusinessID, &row.UserID, &row.Username, &row.StakeBps, &row.CostBasisMicros); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Service) SetBusinessStake(ctx context.Context, businessID int64, username string, stakeBps int32) ([]Stake, error) {
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var ownerUserID string
+	if err := tx.QueryRow(ctx, `
+		SELECT owner_user_id
+		FROM game.businesses
+		WHERE id = $1
+		FOR UPDATE
+	`, businessID).Scan(&ownerUserID); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("business %d not found", businessID)
+		}
+		return nil, err
+	}
+
+	username = strings.TrimSpace(strings.ToLower(username))
+	var targetUserID string
+	if err := tx.QueryRow(ctx, `SELECT user_id FROM users.profiles WHERE LOWER(username) = $1`, username).Scan(&targetUserID); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("username %q not found", username)
+		}
+		return nil, err
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT user_id, stake_bps
+		FROM game.business_stakes
+		WHERE business_id = $1
+		FOR UPDATE
+	`, businessID)
+	if err != nil {
+		return nil, err
+	}
+	current := map[string]int32{}
+	for rows.Next() {
+		var userID string
+		var currentStake int32
+		if err := rows.Scan(&userID, &currentStake); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		current[userID] = currentStake
+	}
+	rows.Close()
+
+	oldTarget := current[targetUserID]
+	diff := stakeBps - oldTarget
+	ownerStake := current[ownerUserID]
+	if targetUserID != ownerUserID && ownerStake-diff < 0 {
+		return nil, fmt.Errorf("owner stake would go negative")
+	}
+	if targetUserID == ownerUserID {
+		var others int32
+		for userID, currentStake := range current {
+			if userID == ownerUserID {
+				continue
+			}
+			others += currentStake
+		}
+		if stakeBps+others != 10000 {
+			return nil, fmt.Errorf("owner stake must leave total stakes at exactly 100%%")
+		}
+	} else if ownerStake-diff+stakeBps+(10000-ownerStake-oldTarget) != 10000 {
+		return nil, fmt.Errorf("stake math invalid")
+	}
+
+	if targetUserID != ownerUserID {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO game.business_stakes (business_id, season_id, user_id, stake_bps, cost_basis_micros)
+			SELECT id, season_id, $2, 0, 0
+			FROM game.businesses
+			WHERE id = $1
+			ON CONFLICT (business_id, user_id) DO NOTHING
+		`, businessID, targetUserID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE game.business_stakes
+			SET stake_bps = $2, updated_at = now()
+			WHERE business_id = $1 AND user_id = $3
+		`, businessID, stakeBps, targetUserID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE game.business_stakes
+			SET stake_bps = stake_bps - $2, updated_at = now()
+			WHERE business_id = $1 AND user_id = $3
+		`, businessID, diff, ownerUserID); err != nil {
+			return nil, err
+		}
+		if stakeBps == 0 {
+			if _, err := tx.Exec(ctx, `DELETE FROM game.business_stakes WHERE business_id = $1 AND user_id = $2`, businessID, targetUserID); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `
+			UPDATE game.business_stakes
+			SET stake_bps = $2, updated_at = now()
+			WHERE business_id = $1 AND user_id = $3
+		`, businessID, stakeBps, ownerUserID); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return s.ListBusinessStakes(ctx, businessID)
+}
+
+func (s *Service) SetBusinessNarrative(ctx context.Context, businessID int64, region, arc, focus string, pressureBps int32) (Business, error) {
+	var row Business
+	err := s.db.QueryRow(ctx, `
+		UPDATE game.businesses
+		SET primary_region = $2,
+		    narrative_arc = $3,
+		    narrative_focus = $4,
+		    narrative_pressure_bps = $5,
+		    updated_at = now()
+		WHERE id = $1
+		RETURNING id, name, visibility, is_listed, base_revenue_micros, primary_region, narrative_arc, narrative_focus, narrative_pressure_bps
+	`, businessID, strings.TrimSpace(region), strings.TrimSpace(arc), strings.TrimSpace(focus), pressureBps).Scan(&row.ID, &row.Name, &row.Visibility, &row.IsListed, &row.BaseRevenueMicros, &row.PrimaryRegion, &row.NarrativeArc, &row.NarrativeFocus, &row.NarrativePressureBps)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return Business{}, fmt.Errorf("business %d not found", businessID)
+		}
+		return Business{}, err
+	}
+	return row, nil
+}
+
+func (s *Service) WorldState(ctx context.Context) (WorldState, error) {
+	seasonID, err := s.ActiveSeasonID(ctx)
+	if err != nil {
+		return WorldState{}, err
+	}
+	var row WorldState
+	err = s.db.QueryRow(ctx, `
+		SELECT regime, political_climate, policy_focus, catalyst_name, catalyst_summary, catalyst_ticks_remaining,
+		       headline, americas_bps, europe_bps, asia_bps, risk_reward_bias_bps
+		FROM game.market_state
+		WHERE season_id = $1
+	`, seasonID).Scan(&row.Regime, &row.PoliticalClimate, &row.PolicyFocus, &row.CatalystName, &row.CatalystSummary, &row.CatalystTicksRemaining, &row.Headline, &row.AmericasBps, &row.EuropeBps, &row.AsiaBps, &row.RiskRewardBiasBps)
+	return row, err
+}
+
+func (s *Service) SetWorldState(ctx context.Context, in WorldState) (WorldState, error) {
+	seasonID, err := s.ActiveSeasonID(ctx)
+	if err != nil {
+		return WorldState{}, err
+	}
+	err = s.db.QueryRow(ctx, `
+		UPDATE game.market_state
+		SET regime = $2,
+		    political_climate = $3,
+		    policy_focus = $4,
+		    catalyst_name = $5,
+		    catalyst_summary = $6,
+		    catalyst_ticks_remaining = $7,
+		    headline = $8,
+		    americas_bps = $9,
+		    europe_bps = $10,
+		    asia_bps = $11,
+		    risk_reward_bias_bps = $12,
+		    updated_at = now()
+		WHERE season_id = $1
+		RETURNING regime, political_climate, policy_focus, catalyst_name, catalyst_summary, catalyst_ticks_remaining,
+		          headline, americas_bps, europe_bps, asia_bps, risk_reward_bias_bps
+	`, seasonID, in.Regime, in.PoliticalClimate, in.PolicyFocus, in.CatalystName, in.CatalystSummary, in.CatalystTicksRemaining, in.Headline, in.AmericasBps, in.EuropeBps, in.AsiaBps, in.RiskRewardBiasBps).
+		Scan(&in.Regime, &in.PoliticalClimate, &in.PolicyFocus, &in.CatalystName, &in.CatalystSummary, &in.CatalystTicksRemaining, &in.Headline, &in.AmericasBps, &in.EuropeBps, &in.AsiaBps, &in.RiskRewardBiasBps)
+	return in, err
 }
 
 func (s *Service) ListPositionsByUser(ctx context.Context, userID string) ([]Position, error) {

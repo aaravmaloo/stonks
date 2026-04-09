@@ -608,7 +608,15 @@ func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) 
 	if err != nil {
 		return out, err
 	}
-	out.NetWorthMicros = out.BalanceMicros + holdings + fundHoldings
+	out.Stakes, err = s.ListStakes(ctx, userID, seasonID)
+	if err != nil {
+		return out, err
+	}
+	stakeHoldings := int64(0)
+	for _, stake := range out.Stakes {
+		stakeHoldings += stake.EstimatedValueMicros
+	}
+	out.NetWorthMicros = out.BalanceMicros + holdings + fundHoldings + stakeHoldings
 	out.Progression, err = s.playerProgress(ctx, userID, seasonID)
 	if err != nil {
 		return out, err

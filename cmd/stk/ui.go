@@ -257,8 +257,14 @@ func renderDashboard(raw map[string]any) error {
 	accent.Printf("\n== DASHBOARD (Season %d) ==\n", d.SeasonID)
 	startingPL := d.NetWorthMicros - game.StarterBalanceMicros
 	openPL := int64(0)
+	stakePL := int64(0)
+	stakeValue := int64(0)
 	for _, p := range d.Positions {
 		openPL += p.UnrealizedMicros
+	}
+	for _, stake := range d.Stakes {
+		stakePL += stake.UnrealizedPLMicros
+		stakeValue += stake.EstimatedValueMicros
 	}
 	downFromPeak := d.NetWorthMicros - d.PeakNetWorthMicros
 
@@ -267,6 +273,8 @@ func renderDashboard(raw map[string]any) error {
 	fmt.Printf("Peak Net Worth:     %s stonky\n", formatMicros(d.PeakNetWorthMicros))
 	fmt.Printf("P/L vs Start:       %s stonky\n", colorizeMicros(startingPL))
 	fmt.Printf("Open Position P/L:  %s stonky\n", colorizeMicros(openPL))
+	fmt.Printf("Stake Value:        %s stonky\n", formatMicros(stakeValue))
+	fmt.Printf("Stake P/L:          %s stonky\n", colorizeMicros(stakePL))
 	fmt.Printf("From Peak:          %s stonky\n", colorizeMicros(downFromPeak))
 	fmt.Printf("Reputation:         %s (%d/10000)\n", d.Progression.ReputationTitle, d.Progression.ReputationScore)
 	fmt.Printf("Profit Streak:      %d ticks (best %d, next reward %d)\n", d.Progression.CurrentProfitStreak, d.Progression.BestProfitStreak, d.Progression.NextStreakTarget)
@@ -339,6 +347,24 @@ func renderDashboard(raw map[string]any) error {
 			)
 		}
 	}
+	fmt.Println()
+	accent.Println("Stakes")
+	if len(d.Stakes) == 0 {
+		printInfo("No passive business stakes yet.")
+	} else {
+		fmt.Printf("%-6s %-20s %-10s %14s %14s %14s\n", "ID", "BUSINESS", "STAKE", "REV/TICK", "VALUE", "P/L")
+		for _, stake := range d.Stakes {
+			fmt.Printf("%-6d %-20s %9.2f%% %14s %14s %14s\n",
+				stake.BusinessID,
+				truncate(stake.BusinessName, 20),
+				float64(stake.StakeBps)/100,
+				formatMicros(stake.RevenueShareMicros),
+				formatMicros(stake.EstimatedValueMicros),
+				colorizeMicros(stake.UnrealizedPLMicros),
+			)
+		}
+	}
+
 	fmt.Println()
 	return nil
 }

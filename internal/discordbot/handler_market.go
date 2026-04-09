@@ -28,8 +28,14 @@ func (b *Bot) handleDashboard(ctx context.Context, s *discordgo.Session, i *disc
 
 	startingPL := out.NetWorthMicros - game.StarterBalanceMicros
 	openPL := int64(0)
+	stakePL := int64(0)
+	stakeValue := int64(0)
 	for _, pos := range out.Positions {
 		openPL += pos.UnrealizedMicros
+	}
+	for _, stake := range out.Stakes {
+		stakePL += stake.UnrealizedPLMicros
+		stakeValue += stake.EstimatedValueMicros
 	}
 	downFromPeak := out.NetWorthMicros - out.PeakNetWorthMicros
 
@@ -40,6 +46,8 @@ func (b *Bot) handleDashboard(ctx context.Context, s *discordgo.Session, i *disc
 			fmt.Sprintf("Peak Net Worth:     %s stonky", fmtMicrosExact(out.PeakNetWorthMicros)),
 			fmt.Sprintf("P/L vs Start:       %s stonky", signedMicrosExact(startingPL)),
 			fmt.Sprintf("Open Position P/L:  %s stonky", signedMicrosExact(openPL)),
+			fmt.Sprintf("Stake Value:        %s stonky", fmtMicrosExact(stakeValue)),
+			fmt.Sprintf("Stake P/L:          %s stonky", signedMicrosExact(stakePL)),
 			fmt.Sprintf("From Peak:          %s stonky", signedMicrosExact(downFromPeak)),
 			fmt.Sprintf("Reputation:         %s (%d/10000)", out.Progression.ReputationTitle, out.Progression.ReputationScore),
 			fmt.Sprintf("Profit Streak:      %d (best %d)", out.Progression.CurrentProfitStreak, out.Progression.BestProfitStreak),
@@ -81,6 +89,24 @@ func (b *Bot) handleDashboard(ctx context.Context, s *discordgo.Session, i *disc
 			))
 		}
 		sections = append(sections, "**Businesses**\n"+codeBlock(lines...))
+	}
+
+	if len(out.Stakes) == 0 {
+		sections = append(sections, "**Stakes**\nNo passive business stakes yet.")
+	} else {
+		lines := []string{
+			fmt.Sprintf("%-4s %-16s %-8s %-10s %-10s", "ID", "BUSINESS", "STAKE", "VALUE", "P/L"),
+		}
+		for _, stake := range out.Stakes {
+			lines = append(lines, fmt.Sprintf("%-4d %-16s %-8.2f %-10s %-10s",
+				stake.BusinessID,
+				truncateText(stake.BusinessName, 16),
+				float64(stake.StakeBps)/100,
+				fmtMicrosExact(stake.EstimatedValueMicros),
+				signedMicrosExact(stake.UnrealizedPLMicros),
+			))
+		}
+		sections = append(sections, "**Stakes**\n"+codeBlock(lines...))
 	}
 
 	eb := NewEmbed().Title(fmt.Sprintf("Dashboard | Season %d", out.SeasonID)).Color(colorInfo).Desc(strings.Join(sections, "\n\n"))

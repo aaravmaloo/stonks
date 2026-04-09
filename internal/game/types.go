@@ -12,6 +12,7 @@ type Dashboard struct {
 	World              WorldView      `json:"world"`
 	Positions          []PositionView `json:"positions"`
 	Businesses         []BusinessView `json:"businesses"`
+	Stakes             []StakeView    `json:"stakes"`
 }
 
 type WalletSummary struct {

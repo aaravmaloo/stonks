@@ -1161,10 +1161,18 @@ func (m mainModel) dashboardView() string {
 		return infoStyle.Render("Loading dashboard...")
 	}
 	d := m.dashboard
+	stakeValue := int64(0)
+	stakePL := int64(0)
+	for _, stake := range d.Stakes {
+		stakeValue += stake.EstimatedValueMicros
+		stakePL += stake.UnrealizedPLMicros
+	}
 	s := fmt.Sprintf("  Season: %d\n\n", d.SeasonID)
 	s += fmt.Sprintf("  Balance:        %s stonky\n", cyanStyle.Render(formatMicros(d.BalanceMicros)))
 	s += fmt.Sprintf("  Net Worth:      %s stonky\n", cyanStyle.Render(formatMicros(d.NetWorthMicros)))
 	s += fmt.Sprintf("  P/L vs Start:   %s stonky\n", colorizeMicrosTUI(d.NetWorthMicros-game.StarterBalanceMicros))
+	s += fmt.Sprintf("  Stake Value:    %s stonky\n", cyanStyle.Render(formatMicros(stakeValue)))
+	s += fmt.Sprintf("  Stake P/L:      %s stonky\n", colorizeMicrosTUI(stakePL))
 	s += "\n" + headerStyle.Render("Positions") + "\n"
 	if len(d.Positions) == 0 {
 		s += infoStyle.Render("No positions yet.") + "\n"
@@ -1179,6 +1187,14 @@ func (m mainModel) dashboardView() string {
 	} else {
 		for _, b := range d.Businesses {
 			s += fmt.Sprintf("  #%-4d %-20s Rev: %-12s Emp: %d/%d Reserve: %s\n", b.ID, truncate(b.Name, 20), formatMicros(b.RevenuePerTickMicros), b.EmployeeCount, b.EmployeeLimit, formatMicros(b.CashReserveMicros))
+		}
+	}
+	s += "\n" + headerStyle.Render("Stakes") + "\n"
+	if len(d.Stakes) == 0 {
+		s += infoStyle.Render("No passive business stakes yet.") + "\n"
+	} else {
+		for _, stake := range d.Stakes {
+			s += fmt.Sprintf("  #%-4d %-20s %6.2f%% Rev: %-12s Value: %-12s P/L: %s\n", stake.BusinessID, truncate(stake.BusinessName, 20), float64(stake.StakeBps)/100, formatMicros(stake.RevenueShareMicros), formatMicros(stake.EstimatedValueMicros), colorizeMicrosTUI(stake.UnrealizedPLMicros))
 		}
 	}
 	return s

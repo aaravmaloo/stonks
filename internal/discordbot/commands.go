@@ -54,6 +54,14 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 		{Name: "dashboard", Description: "Show your full Stanks dashboard"},
 		{Name: "world", Description: "Show the current political climate, catalyst, and global markets"},
 		{Name: "wallet", Description: "Show your wallet balance and stats"},
+		{
+			Name:        "transfer",
+			Description: "Send stonky to another player by username",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionString, Name: "username", Description: "Recipient username", Required: true},
+				{Type: discordgo.ApplicationCommandOptionNumber, Name: "amount", Description: "Amount in stonky", Required: true},
+			},
+		},
 		{Name: "portfolio", Description: "Show your stock positions and P/L"},
 		{
 			Name:        "stocks",
@@ -193,6 +201,15 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 				{Type: discordgo.ApplicationCommandOptionInteger, Name: "business_id", Description: "Business ID", Required: true},
 				{Type: discordgo.ApplicationCommandOptionString, Name: "username", Description: "Recipient username", Required: true},
 				{Type: discordgo.ApplicationCommandOptionNumber, Name: "percent", Description: "Stake percent to transfer", Required: true},
+			},
+		},
+		{
+			Name:        "revoke-stakes",
+			Description: "Take back part of a player's stake in your business",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionInteger, Name: "business_id", Description: "Business ID", Required: true},
+				{Type: discordgo.ApplicationCommandOptionString, Name: "username", Description: "Username to revoke from", Required: true},
+				{Type: discordgo.ApplicationCommandOptionNumber, Name: "percent", Description: "Stake percent to revoke", Required: true},
 			},
 		},
 		{

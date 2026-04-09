@@ -177,6 +177,26 @@ func (b *Bot) handleWallet(ctx context.Context, s *discordgo.Session, i *discord
 	return b.respondEmbed(s, i, eb.Build())
 }
 
+func (b *Bot) handleTransfer(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
+	token, _, err := b.requireSession(ctx, s, i)
+	if err != nil {
+		return err
+	}
+	data := i.ApplicationCommandData()
+	username := strings.TrimSpace(stringOption(data.Options, "username", ""))
+	amountMicros := game.StonkyToMicros(numberOption(data.Options, "amount", 0))
+
+	raw, err := b.client.TransferStonky(ctx, token, username, uuid.NewString(), amountMicros)
+	if err != nil {
+		return b.respondAuthAwareError(ctx, s, i, err)
+	}
+	fields := fieldsFromMap(raw, []fieldMapping{
+		{Key: "amount_micros", Label: "Amount", Micros: true},
+		{Key: "balance_micros", Label: "New Balance", Micros: true},
+	})
+	return b.respondEmbed(s, i, successEmbed("Transfer Complete", fmt.Sprintf("Sent %s to `%s`.", fmtStonky(amountMicros), username), fields))
+}
+
 func (b *Bot) handlePortfolio(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
 	token, _, err := b.requireSession(ctx, s, i)
 	if err != nil {

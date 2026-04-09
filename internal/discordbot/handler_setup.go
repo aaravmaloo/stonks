@@ -70,6 +70,7 @@ func (b *Bot) setupStartEmbed(ctx context.Context, i *discordgo.InteractionCreat
 		"`/login` -> reconnect an existing account",
 		"`/world` -> read the catalyst, political pressure, and global market drift",
 		"`/dashboard` -> see wallet, positions, businesses, reputation, and streaks",
+		"`/transfer` -> send stonky to another player",
 		"`/stakes` -> track your business ownership and passive P/L",
 	}, "\n")
 
@@ -88,8 +89,10 @@ func (b *Bot) setupCommandsEmbed() *discordgo.MessageEmbed {
 		"`/world` read the political layer and mid-term catalyst",
 		"`/business-create name:\"Acme Labs\" visibility:public` open a company",
 		"`/candidates`, `/employees`, `/hire-many` grow staff",
+		"`/transfer username:friend amount:500` send stonky",
 		"`/stakes` inspect your company ownership and mark-to-market P/L",
 		"`/give-stake business_id:1 username:friend percent:10` transfer ownership",
+		"`/revoke-stakes business_id:1 username:friend percent:10` take stake back",
 		"`/leaderboard` see who is winning",
 	}, "\n")
 

@@ -518,6 +518,26 @@ func (b *Bot) handleGiveStake(ctx context.Context, s *discordgo.Session, i *disc
 	return b.respondEmbed(s, i, successEmbed("Stake Transferred", fmt.Sprintf("Gave %.2f%% of business `%d` to `%s`.", percent, businessID, username), fields))
 }
 
+func (b *Bot) handleRevokeStake(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
+	token, _, err := b.requireSession(ctx, s, i)
+	if err != nil {
+		return err
+	}
+	data := i.ApplicationCommandData()
+	businessID := int64(integerOption(data.Options, "business_id", 0))
+	username := strings.TrimSpace(stringOption(data.Options, "username", ""))
+	percent := numberOption(data.Options, "percent", 0)
+	stakeBps := int32(math.Round(percent * 100))
+	raw, err := b.client.RevokeBusinessStake(ctx, token, businessID, username, stakeBps, uuid.NewString())
+	if err != nil {
+		return b.respondAuthAwareError(ctx, s, i, err)
+	}
+	fields := fieldsFromMap(raw, []fieldMapping{
+		{Key: "estimated_value_micros", Label: "Marked Value", Micros: true},
+	})
+	return b.respondEmbed(s, i, successEmbed("Stake Revoked", fmt.Sprintf("Revoked %.2f%% of business `%d` from `%s`.", percent, businessID, username), fields))
+}
+
 func formatMaybeMicros(v any) string {
 	if v == nil {
 		return "-"

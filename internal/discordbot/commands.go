@@ -52,6 +52,7 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 		{Name: "login", Description: "Log into your Stanks account"},
 		{Name: "logout", Description: "Disconnect your Discord from Stanks"},
 		{Name: "dashboard", Description: "Show your full Stanks dashboard"},
+		{Name: "world", Description: "Show the current political climate, catalyst, and global markets"},
 		{Name: "wallet", Description: "Show your wallet balance and stats"},
 		{Name: "portfolio", Description: "Show your stock positions and P/L"},
 		{
@@ -182,6 +183,16 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 			Description: "Sell your business to the bank",
 			Options: []*discordgo.ApplicationCommandOption{
 				{Type: discordgo.ApplicationCommandOptionInteger, Name: "business_id", Description: "Business ID", Required: true},
+			},
+		},
+		{Name: "stakes", Description: "Show the business stakes you own"},
+		{
+			Name:        "give-stake",
+			Description: "Give part of your company to another player by username",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionInteger, Name: "business_id", Description: "Business ID", Required: true},
+				{Type: discordgo.ApplicationCommandOptionString, Name: "username", Description: "Recipient username", Required: true},
+				{Type: discordgo.ApplicationCommandOptionNumber, Name: "percent", Description: "Stake percent to transfer", Required: true},
 			},
 		},
 		{

@@ -44,15 +44,15 @@ func (b *Bot) setupIntroEmbed(ctx context.Context, i *discordgo.InteractionCreat
 	}
 
 	desc := strings.Join([]string{
-		"Stanks is a stock-market sandbox where you build net worth by trading, running businesses, and scaling into funds.",
+		"Stanks is a stock-market sandbox where you build net worth by trading, running businesses, and playing the world state.",
 		"",
 		status,
 	}, "\n")
 
 	return NewEmbed().Title("Welcome To Stanks").Color(colorGold).Desc(desc).
 		Field("Start Cash", "25,000 stonky plus a 2,000 stonky signup bonus", false).
-		Field("Core Loop", "Trade stocks, grow businesses, hire staff, and climb the leaderboard", false).
-		Field("Best First Command", "`/setup` now, then `/stocks`, then `/signup` when ready", false).
+		Field("Core Loop", "Trade stocks, build narrative-driven companies, manage reputation, and react to politics/global markets", false).
+		Field("Best First Command", "`/setup` now, then `/world`, `/stocks`, and `/signup` when ready", false).
 		Build()
 }
 
@@ -68,7 +68,9 @@ func (b *Bot) setupStartEmbed(ctx context.Context, i *discordgo.InteractionCreat
 		"Use these commands in order to get moving fast:",
 		"`/signup` -> create your Stanks account",
 		"`/login` -> reconnect an existing account",
-		"`/dashboard` -> see wallet, positions, and businesses",
+		"`/world` -> read the catalyst, political pressure, and global market drift",
+		"`/dashboard` -> see wallet, positions, businesses, reputation, and streaks",
+		"`/stakes` -> track your business ownership and passive P/L",
 	}, "\n")
 
 	return NewEmbed().Title("How To Start").Color(colorInfo).Desc(desc).
@@ -83,29 +85,32 @@ func (b *Bot) setupCommandsEmbed() *discordgo.MessageEmbed {
 		"`/stocks` list the market",
 		"`/stock symbol:COBOLT` inspect one ticker",
 		"`/order symbol:COBOLT side:buy shares:5` place a trade",
+		"`/world` read the political layer and mid-term catalyst",
 		"`/business-create name:\"Acme Labs\" visibility:public` open a company",
 		"`/candidates`, `/employees`, `/hire-many` grow staff",
+		"`/stakes` inspect your company ownership and mark-to-market P/L",
+		"`/give-stake business_id:1 username:friend percent:10` transfer ownership",
 		"`/leaderboard` see who is winning",
 	}, "\n")
 
 	return NewEmbed().Title("Command Guide").Color(colorMarket).Desc(desc).
-		Field("Trading", "Use `/stocks`, `/stock`, `/order`, `/portfolio`", false).
+		Field("Trading", "Use `/world`, `/stocks`, `/stock`, `/order`, `/portfolio`", false).
 		Field("Business", "Use `/business-create`, `/business`, `/machinery`, `/loans`, `/ipo`", false).
-		Field("Social", "Use `/friends` and `/leaderboard`", false).
+		Field("Progression", "Reputation, risk appetite, streak rewards, and passive business ownership live in `/dashboard` and `/stakes`", false).
 		Build()
 }
 
 func (b *Bot) setupLoopEmbed() *discordgo.MessageEmbed {
 	desc := strings.Join([]string{
-		"1. Scan the market and buy a few positions.",
-		"2. Grow net worth until you can open a business.",
-		"3. Hire employees, buy machinery, manage loans, and push revenue per tick higher.",
-		"4. IPO or sell businesses, rotate into funds, and compound faster than everyone else.",
+		"1. Check `/world` so you know the catalyst, political tone, and strongest region.",
+		"2. Take positions that fit the current risk/reward window.",
+		"3. Open businesses and steer their narrative arc, region exposure, and operating pressure.",
+		"4. Stack profitable ticks to build streak rewards and reputation before the world flips again.",
 	}, "\n")
 
 	return NewEmbed().Title("Game Loop").Color(colorBusiness).Desc(desc).
-		Field("Win Condition", "There is no hard ending. The goal is higher net worth and better businesses.", false).
-		Field("Risk", "Prices move every market tick. Loans and weak businesses can drag you down fast.", false).
-		Field("Good Habit", "Check `/dashboard` and `/leaderboard` often so you can react before a bad run compounds.", false).
+		Field("Win Condition", "There is no hard ending. The goal is to survive shifts, compound streaks, and own stronger companies than everyone else.", false).
+		Field("Risk", "Aggressive play pays more when the world is hot and gets punished harder when politics/global markets turn.", false).
+		Field("Good Habit", "Check `/world` and `/dashboard` often so your plan matches the next few ticks, not the last few.", false).
 		Build()
 }

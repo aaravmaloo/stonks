@@ -41,6 +41,10 @@ func (b *Bot) handleDashboard(ctx context.Context, s *discordgo.Session, i *disc
 			fmt.Sprintf("P/L vs Start:       %s stonky", signedMicrosExact(startingPL)),
 			fmt.Sprintf("Open Position P/L:  %s stonky", signedMicrosExact(openPL)),
 			fmt.Sprintf("From Peak:          %s stonky", signedMicrosExact(downFromPeak)),
+			fmt.Sprintf("Reputation:         %s (%d/10000)", out.Progression.ReputationTitle, out.Progression.ReputationScore),
+			fmt.Sprintf("Profit Streak:      %d (best %d)", out.Progression.CurrentProfitStreak, out.Progression.BestProfitStreak),
+			fmt.Sprintf("Risk Appetite:      %.2f%%", float64(out.Progression.RiskAppetiteBps)/100),
+			fmt.Sprintf("Catalyst:           %s (%d ticks)", out.World.CatalystName, out.World.CatalystTicksRemaining),
 		),
 	}
 
@@ -65,13 +69,13 @@ func (b *Bot) handleDashboard(ctx context.Context, s *discordgo.Session, i *disc
 		sections = append(sections, "**Businesses**\nNo businesses yet.")
 	} else {
 		lines := []string{
-			fmt.Sprintf("%-4s %-18s %-10s %-10s %-10s", "ID", "NAME", "EMP/CAP", "REV/TICK", "RESERVE"),
+			fmt.Sprintf("%-4s %-18s %-10s %-10s %-10s", "ID", "NAME", "ARC", "REV/TICK", "RESERVE"),
 		}
 		for _, biz := range out.Businesses {
 			lines = append(lines, fmt.Sprintf("%-4d %-18s %-10s %-10s %-10s",
 				biz.ID,
 				truncateText(biz.Name, 18),
-				fmt.Sprintf("%d/%d", biz.EmployeeCount, biz.EmployeeLimit),
+				truncateText(biz.NarrativeArc, 10),
 				fmtMicrosExact(biz.RevenuePerTickMicros),
 				fmtMicrosExact(biz.CashReserveMicros),
 			))
@@ -80,6 +84,45 @@ func (b *Bot) handleDashboard(ctx context.Context, s *discordgo.Session, i *disc
 	}
 
 	eb := NewEmbed().Title(fmt.Sprintf("Dashboard | Season %d", out.SeasonID)).Color(colorInfo).Desc(strings.Join(sections, "\n\n"))
+	return b.respondEmbedWithComponents(s, i, eb.Build(), []discordgo.MessageComponent{dashboardButtons()})
+}
+
+func (b *Bot) handleWorld(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
+	token, _, err := b.requireSession(ctx, s, i)
+	if err != nil {
+		return err
+	}
+	raw, err := b.client.World(ctx, token)
+	if err != nil {
+		return b.respondAuthAwareError(ctx, s, i, err)
+	}
+	out, err := decodeInto[game.WorldView](raw)
+	if err != nil {
+		return err
+	}
+
+	lines := []string{
+		fmt.Sprintf("Regime:        %s", out.Regime),
+		fmt.Sprintf("Politics:      %s", out.PoliticalClimate),
+		fmt.Sprintf("Policy Focus:  %s", out.PolicyFocus),
+		fmt.Sprintf("Catalyst:      %s (%d ticks)", out.CatalystName, out.CatalystTicksRemaining),
+		fmt.Sprintf("Risk Bias:     %.2f%%", float64(out.RiskRewardBiasBps)/100),
+	}
+	for _, region := range out.Regions {
+		lines = append(lines, fmt.Sprintf("%-12s %8.2f%%", region.Name, float64(region.TrendBps)/100))
+	}
+
+	desc := codeBlock(lines...) + "\n\n" + out.CatalystSummary + "\n\n" + out.Headline
+	if len(out.RecentEvents) > 0 {
+		eventLines := make([]string, 0, len(out.RecentEvents)+1)
+		eventLines = append(eventLines, "CATEGORY      HEADLINE")
+		for _, event := range out.RecentEvents {
+			eventLines = append(eventLines, fmt.Sprintf("%-12s %s", truncateText(strings.ToUpper(event.Category), 12), truncateText(event.Headline, 48)))
+		}
+		desc += "\n\nRecent Events\n" + codeBlock(eventLines...)
+	}
+
+	eb := NewEmbed().Title("World State").Color(colorMarket).Desc(desc)
 	return b.respondEmbedWithComponents(s, i, eb.Build(), []discordgo.MessageComponent{dashboardButtons()})
 }
 

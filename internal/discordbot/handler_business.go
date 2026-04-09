@@ -3,6 +3,7 @@ package discordbot
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -53,6 +54,11 @@ func (b *Bot) handleBusiness(ctx context.Context, s *discordgo.Session, i *disco
 		fmt.Sprintf("Name:        %s", out.Name),
 		fmt.Sprintf("Visibility:  %s", out.Visibility),
 		fmt.Sprintf("Listed:      %t", out.IsListed),
+		fmt.Sprintf("Your Stake:  %.2f%%", float64(out.OwnedStakeBps)/100),
+		fmt.Sprintf("Region:      %s", out.PrimaryRegion),
+		fmt.Sprintf("Story Arc:   %s", out.NarrativeArc),
+		fmt.Sprintf("Story Focus: %s", out.NarrativeFocus),
+		fmt.Sprintf("Pressure:    %.2f%%", float64(out.NarrativePressureBps)/100),
 		fmt.Sprintf("Strategy:    %s", out.Strategy),
 		fmt.Sprintf("Employees:   %d / %d", out.EmployeeCount, out.EmployeeLimit),
 		fmt.Sprintf("Machinery:   %d", out.MachineryCount),
@@ -61,6 +67,8 @@ func (b *Bot) handleBusiness(ctx context.Context, s *discordgo.Session, i *disco
 		fmt.Sprintf("Op Health:   %.2f%%", float64(out.OperationalHealthBps)/100),
 		fmt.Sprintf("Reserve:     %s stonky", fmtMicrosExact(out.CashReserveMicros)),
 		fmt.Sprintf("Revenue/tick:%s stonky", fmtMicrosExact(out.RevenuePerTickMicros)),
+		fmt.Sprintf("Salary/tick: %s stonky", fmtMicrosExact(out.EmployeeSalaryMicros)),
+		fmt.Sprintf("Maint/tick:  %s stonky", fmtMicrosExact(out.MaintenanceMicros)),
 		fmt.Sprintf("Mach output: %s stonky", fmtMicrosExact(out.MachineryOutputMicros)),
 		fmt.Sprintf("Mach upkeep: %s stonky", fmtMicrosExact(out.MachineryUpkeepMicros)),
 		fmt.Sprintf("Loan debt:   %s stonky", fmtMicrosExact(out.LoanOutstandingMicros)),
@@ -456,6 +464,58 @@ func (b *Bot) handleSellBusiness(ctx context.Context, s *discordgo.Session, i *d
 		{Key: "balance_micros", Label: "New Balance", Micros: true},
 	})
 	return b.respondEmbed(s, i, successEmbed("Business Sold", fmt.Sprintf("Business `%d` has been sold to the bank.", businessID), fields))
+}
+
+func (b *Bot) handleStakes(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
+	token, _, err := b.requireSession(ctx, s, i)
+	if err != nil {
+		return err
+	}
+	raw, err := b.client.ListStakes(ctx, token)
+	if err != nil {
+		return b.respondAuthAwareError(ctx, s, i, err)
+	}
+	out, err := decodeInto[stakesPayload](raw)
+	if err != nil {
+		return err
+	}
+	if len(out.Stakes) == 0 {
+		return b.respondEmbed(s, i, infoEmbed("Stakes", "You do not own any business stakes yet.", nil))
+	}
+	lines := []string{
+		fmt.Sprintf("%-4s %-18s %-10s %-8s %10s %10s", "ID", "BUSINESS", "CONTROL", "STAKE", "VALUE", "P/L"),
+	}
+	for _, stake := range out.Stakes {
+		lines = append(lines, fmt.Sprintf("%-4d %-18s %-10s %7.2f%% %10s %10s",
+			stake.BusinessID,
+			truncateText(stake.BusinessName, 18),
+			truncateText(stake.ControllerUsername, 10),
+			float64(stake.StakeBps)/100.0,
+			fmtMicrosExact(stake.EstimatedValueMicros),
+			signedMicrosExact(stake.UnrealizedPLMicros),
+		))
+	}
+	return b.respondEmbed(s, i, NewEmbed().Title("Stakes").Color(colorBusiness).Desc(codeBlock(lines...)).Build())
+}
+
+func (b *Bot) handleGiveStake(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
+	token, _, err := b.requireSession(ctx, s, i)
+	if err != nil {
+		return err
+	}
+	data := i.ApplicationCommandData()
+	businessID := int64(integerOption(data.Options, "business_id", 0))
+	username := strings.TrimSpace(stringOption(data.Options, "username", ""))
+	percent := numberOption(data.Options, "percent", 0)
+	stakeBps := int32(math.Round(percent * 100))
+	raw, err := b.client.TransferBusinessStake(ctx, token, businessID, username, stakeBps, uuid.NewString())
+	if err != nil {
+		return b.respondAuthAwareError(ctx, s, i, err)
+	}
+	fields := fieldsFromMap(raw, []fieldMapping{
+		{Key: "estimated_value_micros", Label: "Marked Value", Micros: true},
+	})
+	return b.respondEmbed(s, i, successEmbed("Stake Transferred", fmt.Sprintf("Gave %.2f%% of business `%d` to `%s`.", percent, businessID, username), fields))
 }
 
 func formatMaybeMicros(v any) string {

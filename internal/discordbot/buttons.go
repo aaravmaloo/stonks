@@ -110,7 +110,8 @@ func dashboardButtons() discordgo.ActionsRow {
 	return actionRow(
 		primaryButton("Portfolio", customID("nav", "portfolio")),
 		primaryButton("Stocks", customID("nav", "stocks")),
-		primaryButton("Funds", customID("nav", "funds")),
+		primaryButton("World", customID("nav", "world")),
+		secondaryButton("Stakes", customID("nav", "stakes")),
 		secondaryButton("Refresh", customID("refresh", "dashboard")),
 	)
 }
@@ -124,7 +125,7 @@ func setupButtons() []discordgo.MessageComponent {
 		),
 		actionRow(
 			secondaryButton("Browse Stocks", customID("nav", "stocks")),
-			secondaryButton("Browse Funds", customID("nav", "funds")),
+			secondaryButton("World State", customID("nav", "world")),
 			secondaryButton("Intro", customID("setup", "intro")),
 		),
 	}

@@ -41,6 +41,10 @@ type leaderboardPayload struct {
 	Rows []game.LeaderboardRow `json:"rows"`
 }
 
+type stakesPayload struct {
+	Stakes []game.StakeView `json:"stakes"`
+}
+
 type idPayload struct {
 	ID int64 `json:"id"`
 }
@@ -140,7 +144,7 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 
 func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	data := i.ApplicationCommandData()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	var err error
@@ -155,6 +159,8 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleLogout(ctx, s, i) })
 	case "dashboard":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleDashboard(ctx, s, i) })
+	case "world":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleWorld(ctx, s, i) })
 	case "wallet":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleWallet(ctx, s, i) })
 	case "portfolio":
@@ -193,6 +199,10 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleIPO(ctx, s, i) })
 	case "sell-business":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleSellBusiness(ctx, s, i) })
+	case "stakes":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleStakes(ctx, s, i) })
+	case "give-stake":
+		err = b.runDeferred(ctx, s, i, func() error { return b.handleGiveStake(ctx, s, i) })
 	case "leaderboard":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleLeaderboard(ctx, s, i) })
 	case "friends":
@@ -306,6 +316,10 @@ func (b *Bot) handleNavButton(ctx context.Context, s *discordgo.Session, i *disc
 		return b.renderStockPage(s, i, out.Stocks, 0, false)
 	case "funds":
 		return b.handleFunds(ctx, s, i)
+	case "world":
+		return b.handleWorld(ctx, s, i)
+	case "stakes":
+		return b.handleStakes(ctx, s, i)
 	}
 	return nil
 }
@@ -384,6 +398,8 @@ func (b *Bot) handleRefreshBizButton(ctx context.Context, s *discordgo.Session, 
 		Field("Employees", fmt.Sprintf("%d / %d", out.EmployeeCount, out.EmployeeLimit), true).
 		Field("Revenue/Tick", fmtStonky(out.RevenuePerTickMicros), true).
 		Field("Operating Costs", fmtStonky(out.OperatingCostsMicros), true).
+		Field("Salary/Tick", fmtStonky(out.EmployeeSalaryMicros), true).
+		Field("Maint/Tick", fmtStonky(out.MaintenanceMicros), true).
 		Field("Strategy", out.Strategy, true).
 		Field("Brand", progressBar(out.BrandBps, 10000, 10), true).
 		Field("Health", progressBar(out.OperationalHealthBps, 10000, 10), true)

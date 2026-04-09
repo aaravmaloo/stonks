@@ -81,3 +81,46 @@ func TestMaxAffordableBuy(t *testing.T) {
 		t.Fatalf("expected units+1 to be unaffordable")
 	}
 }
+
+func TestReputationTitle(t *testing.T) {
+	if got := reputationTitle(9000); got != "Market Icon" {
+		t.Fatalf("got %q", got)
+	}
+	if got := reputationTitle(3200); got != "Watched By Regulators" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestStockRegionAndSectorDeterministic(t *testing.T) {
+	region := stockRegion("COBOLT")
+	if region != stockRegion("COBOLT") {
+		t.Fatalf("region should be deterministic")
+	}
+	sector := stockSector("COBOLT")
+	if sector == "" {
+		t.Fatalf("sector should not be empty")
+	}
+}
+
+func TestScaledHireCostGrowsExponentially(t *testing.T) {
+	base := int64(1_000) * MicrosPerStonky
+	first := scaledHireCostMicros(base, 0, 0)
+	hundredth := scaledHireCostMicros(base, 0, 99)
+	if first != base {
+		t.Fatalf("first hire got %d want %d", first, base)
+	}
+	if hundredth < 900_000*MicrosPerStonky {
+		t.Fatalf("hundredth hire too low: %d", hundredth)
+	}
+}
+
+func TestEmployeeCostHelpersPositive(t *testing.T) {
+	salary := employeeSalaryCostMicros(12, 1800, 2, 2, 1, 1)
+	maintenance := businessMaintenanceCostMicros(12, 3, 25_000*MicrosPerStonky, 1, 1)
+	if salary <= 0 {
+		t.Fatalf("salary should be positive")
+	}
+	if maintenance <= 0 {
+		t.Fatalf("maintenance should be positive")
+	}
+}

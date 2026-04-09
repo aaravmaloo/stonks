@@ -928,21 +928,38 @@ func (s *Service) SellBusinessToBank(ctx context.Context, userID string, seasonI
 		payout = 0
 	}
 
-	var balance int64
+	stakes, err := loadBusinessStakesTx(ctx, tx, businessID, seasonID)
+	if err != nil {
+		return out, err
+	}
+	ownerPayout := int64(0)
+	ownerStakeBps := int32(0)
+	for _, stake := range stakes {
+		stakePayout := int64(math.Round(float64(payout) * float64(stake.StakeBps) / 10000.0))
+		if stakePayout == 0 && payout > 0 && stake.StakeBps > 0 {
+			stakePayout = 1
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE game.wallets
+			SET balance_micros = balance_micros + $1, updated_at = now()
+			WHERE user_id = $2 AND season_id = $3
+		`, stakePayout, stake.UserID, seasonID); err != nil {
+			return out, err
+		}
+		if err := appendLedgerEntries(ctx, tx, stake.UserID, seasonID, "business_sale", stakePayout, 0); err != nil {
+			return out, err
+		}
+		if stake.UserID == userID {
+			ownerPayout = stakePayout
+			ownerStakeBps = stake.StakeBps
+		}
+	}
+	var ownerBalance int64
 	if err := tx.QueryRow(ctx, `
 		SELECT balance_micros
 		FROM game.wallets
 		WHERE user_id = $1 AND season_id = $2
-		FOR UPDATE
-	`, userID, seasonID).Scan(&balance); err != nil {
-		return out, err
-	}
-	balance += payout
-	if _, err := tx.Exec(ctx, `
-		UPDATE game.wallets
-		SET balance_micros = $1, updated_at = now()
-		WHERE user_id = $2 AND season_id = $3
-	`, balance, userID, seasonID); err != nil {
+	`, userID, seasonID).Scan(&ownerBalance); err != nil {
 		return out, err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -960,9 +977,6 @@ func (s *Service) SellBusinessToBank(ctx context.Context, userID string, seasonI
 	`, businessID, seasonID, userID, gross, factor, loanOutstanding, payout); err != nil {
 		return out, err
 	}
-	if err := appendLedgerEntries(ctx, tx, userID, seasonID, "business_sale", payout, 0); err != nil {
-		return out, err
-	}
 	if _, err := tx.Exec(ctx, `DELETE FROM game.businesses WHERE id = $1 AND season_id = $2`, businessID, seasonID); err != nil {
 		return out, err
 	}
@@ -977,7 +991,221 @@ func (s *Service) SellBusinessToBank(ctx context.Context, userID string, seasonI
 	out["adjustment_factor"] = factor
 	out["loan_payoff_micros"] = loanOutstanding
 	out["payout_micros"] = payout
-	out["balance_micros"] = balance
+	out["owner_payout_micros"] = ownerPayout
+	out["owner_stake_bps"] = ownerStakeBps
+	out["balance_micros"] = ownerBalance
+	return out, nil
+}
+
+type businessStakeRow struct {
+	UserID          string
+	Username        string
+	StakeBps        int32
+	CostBasisMicros int64
+}
+
+func loadBusinessStakesTx(ctx context.Context, tx pgx.Tx, businessID, seasonID int64) ([]businessStakeRow, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT s.user_id, p.username, s.stake_bps, s.cost_basis_micros
+		FROM game.business_stakes s
+		JOIN users.profiles p ON p.user_id = s.user_id
+		WHERE s.business_id = $1 AND s.season_id = $2
+		ORDER BY s.stake_bps DESC, p.username
+	`, businessID, seasonID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []businessStakeRow
+	for rows.Next() {
+		var row businessStakeRow
+		if err := rows.Scan(&row.UserID, &row.Username, &row.StakeBps, &row.CostBasisMicros); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func loadBusinessStakeBpsTx(ctx context.Context, tx pgx.Tx, businessID, seasonID int64, userID string) (int32, error) {
+	var stakeBps int32
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(stake_bps, 0)
+		FROM game.business_stakes
+		WHERE business_id = $1 AND season_id = $2 AND user_id = $3
+	`, businessID, seasonID, userID).Scan(&stakeBps)
+	if err == pgx.ErrNoRows {
+		return 0, nil
+	}
+	return stakeBps, err
+}
+
+func (s *Service) ListStakes(ctx context.Context, userID string, seasonID int64) ([]StakeView, error) {
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `
+		SELECT business_id, stake_bps, cost_basis_micros
+		FROM game.business_stakes
+		WHERE user_id = $1 AND season_id = $2
+		ORDER BY business_id
+	`, userID, seasonID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type heldStake struct {
+		businessID int64
+		stakeBps   int32
+		costBasis  int64
+	}
+	var held []heldStake
+	for rows.Next() {
+		var item heldStake
+		if err := rows.Scan(&item.businessID, &item.stakeBps, &item.costBasis); err != nil {
+			return nil, err
+		}
+		held = append(held, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]StakeView, 0, len(held))
+	for _, item := range held {
+		cycles, err := loadBusinessCyclesTx(ctx, tx, seasonID, "", &item.businessID)
+		if err != nil {
+			return nil, err
+		}
+		if len(cycles) == 0 {
+			continue
+		}
+		cycle := cycles[0]
+		proj := projectBusinessCycle(cycle)
+		totalValue := estimateBusinessValuationMicros(cycle, proj)
+		shareValue := int64(math.Round(float64(totalValue) * float64(item.stakeBps) / 10000.0))
+		revenueShare := int64(math.Round(float64(proj.RevenuePerTickMicros) * float64(item.stakeBps) / 10000.0))
+		out = append(out, StakeView{
+			BusinessID:           cycle.businessID,
+			BusinessName:         cycle.name,
+			ControllerUsername:   cycle.controllerUsername,
+			PrimaryRegion:        cycle.primaryRegion,
+			NarrativeArc:         cycle.narrativeArc,
+			StakeBps:             item.stakeBps,
+			RevenueShareMicros:   revenueShare,
+			EstimatedValueMicros: shareValue,
+			CostBasisMicros:      item.costBasis,
+			UnrealizedPLMicros:   shareValue - item.costBasis,
+			LastEvent:            cycle.lastEvent,
+		})
+	}
+	return out, tx.Commit(ctx)
+}
+
+func (s *Service) TransferBusinessStake(ctx context.Context, in TransferBusinessStakeInput) (map[string]any, error) {
+	out := map[string]any{}
+	if in.StakeBps <= 0 {
+		return out, fmt.Errorf("stake percent must be > 0")
+	}
+	if in.StakeBps >= 10000 {
+		return out, fmt.Errorf("cannot transfer 100%% or more")
+	}
+	in.RecipientUsername = strings.ToLower(strings.TrimSpace(in.RecipientUsername))
+	if in.RecipientUsername == "" {
+		return out, fmt.Errorf("recipient username is required")
+	}
+
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return out, err
+	}
+	defer tx.Rollback(ctx)
+	if err := claimIdempotency(ctx, tx, in.UserID, in.IdempotencyKey, "transfer_business_stake"); err != nil {
+		return out, err
+	}
+
+	var ownerUserID string
+	if err := tx.QueryRow(ctx, `
+		SELECT owner_user_id
+		FROM game.businesses
+		WHERE id = $1 AND season_id = $2
+		FOR UPDATE
+	`, in.BusinessID, in.SeasonID).Scan(&ownerUserID); err != nil {
+		return out, err
+	}
+	if ownerUserID != in.UserID {
+		return out, ErrUnauthorized
+	}
+
+	var recipientUserID string
+	if err := tx.QueryRow(ctx, `
+		SELECT user_id
+		FROM users.profiles
+		WHERE LOWER(username) = $1
+	`, in.RecipientUsername).Scan(&recipientUserID); err != nil {
+		return out, fmt.Errorf("recipient username not found")
+	}
+	if recipientUserID == in.UserID {
+		return out, fmt.Errorf("cannot transfer stake to yourself")
+	}
+
+	var ownerStakeBps int32
+	var ownerBasis int64
+	if err := tx.QueryRow(ctx, `
+		SELECT stake_bps, cost_basis_micros
+		FROM game.business_stakes
+		WHERE business_id = $1 AND season_id = $2 AND user_id = $3
+		FOR UPDATE
+	`, in.BusinessID, in.SeasonID, in.UserID).Scan(&ownerStakeBps, &ownerBasis); err != nil {
+		return out, err
+	}
+	if ownerStakeBps <= in.StakeBps {
+		return out, fmt.Errorf("you must keep some controlling stake")
+	}
+
+	cycles, err := loadBusinessCyclesTx(ctx, tx, in.SeasonID, "", &in.BusinessID)
+	if err != nil {
+		return out, err
+	}
+	if len(cycles) == 0 {
+		return out, fmt.Errorf("business not found")
+	}
+	valueNow := estimateBusinessValuationMicros(cycles[0], projectBusinessCycle(cycles[0]))
+	transferredBasis := int64(math.Round(float64(valueNow) * float64(in.StakeBps) / 10000.0))
+	ownerBasisReduction := int64(math.Round(float64(ownerBasis) * float64(in.StakeBps) / float64(ownerStakeBps)))
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE game.business_stakes
+		SET stake_bps = stake_bps - $1,
+		    cost_basis_micros = GREATEST(0, cost_basis_micros - $2),
+		    updated_at = now()
+		WHERE business_id = $3 AND season_id = $4 AND user_id = $5
+	`, in.StakeBps, ownerBasisReduction, in.BusinessID, in.SeasonID, in.UserID); err != nil {
+		return out, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO game.business_stakes (business_id, season_id, user_id, stake_bps, cost_basis_micros)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (business_id, user_id)
+		DO UPDATE SET stake_bps = game.business_stakes.stake_bps + EXCLUDED.stake_bps,
+		              cost_basis_micros = game.business_stakes.cost_basis_micros + EXCLUDED.cost_basis_micros,
+		              updated_at = now()
+	`, in.BusinessID, in.SeasonID, recipientUserID, in.StakeBps, transferredBasis); err != nil {
+		return out, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return out, err
+	}
+	out["ok"] = true
+	out["business_id"] = in.BusinessID
+	out["recipient_username"] = in.RecipientUsername
+	out["stake_bps"] = in.StakeBps
+	out["estimated_value_micros"] = transferredBasis
 	return out, nil
 }
 

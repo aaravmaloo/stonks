@@ -118,6 +118,9 @@ func (s *Service) EnsurePlayer(ctx context.Context, userID, email, username stri
 	if err != nil {
 		return err
 	}
+	if err := ensurePlayerProgressTx(ctx, tx, userID, seasonID); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -189,48 +192,55 @@ func (s *Service) ClampNegativeBalances(ctx context.Context, seasonID int64) err
 }
 
 type businessCycle struct {
-	businessID       int64
-	userID           string
-	name             string
-	visibility       string
-	isListed         bool
-	stockSymbol      string
-	employeeLimit    int64
-	strategy         string
-	baseRevenue      int64
-	lastEvent        string
-	marketingLevel   int32
-	rdLevel          int32
-	automationLevel  int32
-	complianceLevel  int32
-	brandBps         int32
-	healthBps        int32
-	reserveMicros    int64
-	employeeRevenue  int64
-	employeeCount    int64
-	avgRiskBps       float64
-	opsCount         int64
-	engineerCount    int64
-	productCount     int64
-	salesCount       int64
-	growthCount      int64
-	financeCount     int64
-	legalCount       int64
-	designCount      int64
-	machineryCount   int64
-	machineOutput    int64
-	machineUpkeep    int64
-	loanOutstanding  int64
-	loanInterest     int64
-	stockID          *int64
-	stockPrice       int64
-	stockAnchorPrice int64
+	businessID         int64
+	userID             string
+	name               string
+	controllerUsername string
+	visibility         string
+	isListed           bool
+	stockSymbol        string
+	primaryRegion      string
+	narrativeArc       string
+	narrativeFocus     string
+	narrativePressure  int32
+	employeeLimit      int64
+	strategy           string
+	baseRevenue        int64
+	lastEvent          string
+	marketingLevel     int32
+	rdLevel            int32
+	automationLevel    int32
+	complianceLevel    int32
+	brandBps           int32
+	healthBps          int32
+	reserveMicros      int64
+	employeeRevenue    int64
+	employeeCount      int64
+	avgRiskBps         float64
+	opsCount           int64
+	engineerCount      int64
+	productCount       int64
+	salesCount         int64
+	growthCount        int64
+	financeCount       int64
+	legalCount         int64
+	designCount        int64
+	machineryCount     int64
+	machineOutput      int64
+	machineUpkeep      int64
+	loanOutstanding    int64
+	loanInterest       int64
+	stockID            *int64
+	stockPrice         int64
+	stockAnchorPrice   int64
 }
 
 type businessProjection struct {
 	GrossRevenueMicros   int64
 	OperatingCostsMicros int64
 	RevenuePerTickMicros int64
+	EmployeeSalaryMicros int64
+	MaintenanceMicros    int64
 	MachineOutputMicros  int64
 	MachineUpkeepMicros  int64
 }
@@ -240,9 +250,14 @@ func loadBusinessCyclesTx(ctx context.Context, tx pgx.Tx, seasonID int64, ownerU
 		SELECT b.id,
 		       b.owner_user_id,
 		       b.name,
+		       owner.username,
 		       b.visibility,
 		       b.is_listed,
 		       COALESCE(b.stock_symbol, ''),
+		       b.primary_region,
+		       b.narrative_arc,
+		       b.narrative_focus,
+		       b.narrative_pressure_bps,
 		       b.seat_capacity,
 		       b.strategy,
 		       b.base_revenue_micros,
@@ -274,6 +289,7 @@ func loadBusinessCyclesTx(ctx context.Context, tx pgx.Tx, seasonID int64, ownerU
 		       COALESCE(bs.current_price_micros, 0),
 		       COALESCE(bs.anchor_price_micros, 0)
 		FROM game.businesses b
+		JOIN users.profiles owner ON owner.user_id = b.owner_user_id
 		LEFT JOIN LATERAL (
 			SELECT COALESCE(SUM(be.revenue_per_tick_micros), 0) AS employee_revenue,
 			       COALESCE(AVG(be.risk_bps), 0) AS avg_risk_bps,
@@ -335,7 +351,7 @@ func loadBusinessCyclesTx(ctx context.Context, tx pgx.Tx, seasonID int64, ownerU
 		var c businessCycle
 		var stockID sql.NullInt64
 		if err := rows.Scan(
-			&c.businessID, &c.userID, &c.name, &c.visibility, &c.isListed, &c.stockSymbol, &c.employeeLimit, &c.strategy,
+			&c.businessID, &c.userID, &c.name, &c.controllerUsername, &c.visibility, &c.isListed, &c.stockSymbol, &c.primaryRegion, &c.narrativeArc, &c.narrativeFocus, &c.narrativePressure, &c.employeeLimit, &c.strategy,
 			&c.baseRevenue, &c.lastEvent, &c.marketingLevel, &c.rdLevel, &c.automationLevel, &c.complianceLevel,
 			&c.brandBps, &c.healthBps, &c.reserveMicros,
 			&c.employeeRevenue, &c.employeeCount, &c.avgRiskBps,
@@ -426,18 +442,50 @@ func projectBusinessCycle(c businessCycle) businessProjection {
 	compShield := 1.0 - math.Min(0.45, float64(c.complianceLevel)*0.03)
 	riskPenalty := int64(math.Round(float64(max64(gross, 0)) * riskFactor * 0.38 * compShield * strategyRisk * team.RiskMultiplier))
 
-	salaryCost := int64(math.Round(float64(c.employeeCount) * (11 + float64(c.marketingLevel+c.rdLevel+c.automationLevel+c.complianceLevel)*0.8) * float64(MicrosPerStonky)))
+	salaryCost := employeeSalaryCostMicros(c.employeeCount, c.avgRiskBps, c.marketingLevel, c.rdLevel, c.automationLevel, c.complianceLevel)
+	maintenanceCost := businessMaintenanceCostMicros(c.employeeCount, c.machineryCount, c.reserveMicros, c.automationLevel, c.complianceLevel)
 	machineryMaintenance := machineUpkeep
 	upgradeBurn := int64((int64(c.marketingLevel)*5 + int64(c.rdLevel)*5 + int64(c.automationLevel)*4 + int64(c.complianceLevel)*4) * MicrosPerStonky)
-	totalCosts := salaryCost + machineryMaintenance + c.loanInterest + upgradeBurn + riskPenalty
+	totalCosts := salaryCost + maintenanceCost + machineryMaintenance + c.loanInterest + upgradeBurn + riskPenalty
 
 	return businessProjection{
 		GrossRevenueMicros:   gross,
 		OperatingCostsMicros: totalCosts,
 		RevenuePerTickMicros: gross - totalCosts,
+		EmployeeSalaryMicros: salaryCost,
+		MaintenanceMicros:    maintenanceCost,
 		MachineOutputMicros:  machineOutput,
 		MachineUpkeepMicros:  machineUpkeep,
 	}
+}
+
+func estimateBusinessValuationMicros(c businessCycle, p businessProjection) int64 {
+	operating := p.RevenuePerTickMicros
+	if operating < 0 {
+		operating = p.GrossRevenueMicros / 3
+	}
+	multiple := 18.0 + float64(c.employeeCount)/4.0 + float64(c.marketingLevel+c.rdLevel)*1.2
+	switch c.narrativeArc {
+	case "breakout":
+		multiple += 6
+	case "expansion":
+		multiple += 3
+	case "fragile":
+		multiple -= 5
+	case "turnaround":
+		multiple -= 2
+	}
+	if c.isListed {
+		multiple += 2
+	}
+	if multiple < 8 {
+		multiple = 8
+	}
+	value := int64(math.Round(float64(max64(operating, 0))*multiple + float64(c.reserveMicros) - float64(c.loanOutstanding)))
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func max64(a, b int64) int64 {
@@ -515,17 +563,27 @@ func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) 
 	}
 	for _, c := range cycles {
 		p := projectBusinessCycle(c)
+		ownedStakeBps, err := loadBusinessStakeBpsTx(ctx, tx, c.businessID, seasonID, userID)
+		if err != nil {
+			return out, err
+		}
 		out.Businesses = append(out.Businesses, BusinessView{
 			ID:                    c.businessID,
 			Name:                  c.name,
 			Visibility:            c.visibility,
 			IsListed:              c.isListed,
 			StockSymbol:           c.stockSymbol,
+			PrimaryRegion:         c.primaryRegion,
+			NarrativeArc:          c.narrativeArc,
+			NarrativeFocus:        c.narrativeFocus,
+			NarrativePressureBps:  c.narrativePressure,
 			EmployeeLimit:         c.employeeLimit,
 			EmployeeCount:         c.employeeCount,
 			RevenuePerTickMicros:  p.RevenuePerTickMicros,
 			GrossRevenueMicros:    p.GrossRevenueMicros,
 			OperatingCostsMicros:  p.OperatingCostsMicros,
+			EmployeeSalaryMicros:  p.EmployeeSalaryMicros,
+			MaintenanceMicros:     p.MaintenanceMicros,
 			MachineryCount:        c.machineryCount,
 			MachineryOutputMicros: p.MachineOutputMicros,
 			MachineryUpkeepMicros: p.MachineUpkeepMicros,
@@ -539,6 +597,7 @@ func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) 
 			OperationalHealthBps:  c.healthBps,
 			CashReserveMicros:     c.reserveMicros,
 			LastEvent:             c.lastEvent,
+			OwnedStakeBps:         ownedStakeBps,
 		})
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -550,6 +609,14 @@ func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) 
 		return out, err
 	}
 	out.NetWorthMicros = out.BalanceMicros + holdings + fundHoldings
+	out.Progression, err = s.playerProgress(ctx, userID, seasonID)
+	if err != nil {
+		return out, err
+	}
+	out.World, err = s.WorldState(ctx, seasonID)
+	if err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
@@ -777,12 +844,13 @@ func (s *Service) CreateBusiness(ctx context.Context, in CreateBusinessInput) (i
 	if netWorth < BusinessUnlockMicros {
 		return 0, ErrBusinessLocked
 	}
+	region, arc, focus := businessNarrativeSeed(s.nextFloat())
 
 	err = tx.QueryRow(ctx, `
-		INSERT INTO game.businesses (owner_user_id, season_id, name, visibility, is_listed, base_revenue_micros)
-		VALUES ($1, $2, $3, $4, false, $5)
+		INSERT INTO game.businesses (owner_user_id, season_id, name, visibility, is_listed, base_revenue_micros, primary_region, narrative_arc, narrative_focus, narrative_pressure_bps)
+		VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, 2200)
 		RETURNING id
-	`, in.UserID, in.SeasonID, in.Name, in.Visibility, 18*MicrosPerStonky).Scan(&id)
+	`, in.UserID, in.SeasonID, in.Name, in.Visibility, 18*MicrosPerStonky, region, arc, focus).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -793,6 +861,13 @@ func (s *Service) CreateBusiness(ctx context.Context, in CreateBusinessInput) (i
 		WHERE user_id = $2 AND season_id = $3
 	`, id, in.UserID, in.SeasonID)
 	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO game.business_stakes (business_id, season_id, user_id, stake_bps, cost_basis_micros)
+		VALUES ($1, $2, $3, 10000, 0)
+		ON CONFLICT (business_id, user_id) DO NOTHING
+	`, id, in.SeasonID, in.UserID); err != nil {
 		return 0, err
 	}
 
@@ -818,17 +893,27 @@ func (s *Service) BusinessState(ctx context.Context, userID string, seasonID, bu
 	}
 	c := cycles[0]
 	p := projectBusinessCycle(c)
+	ownedStakeBps, err := loadBusinessStakeBpsTx(ctx, tx, c.businessID, seasonID, userID)
+	if err != nil {
+		return out, err
+	}
 	out = BusinessView{
 		ID:                    c.businessID,
 		Name:                  c.name,
 		Visibility:            c.visibility,
 		IsListed:              c.isListed,
 		StockSymbol:           c.stockSymbol,
+		PrimaryRegion:         c.primaryRegion,
+		NarrativeArc:          c.narrativeArc,
+		NarrativeFocus:        c.narrativeFocus,
+		NarrativePressureBps:  c.narrativePressure,
 		EmployeeLimit:         c.employeeLimit,
 		EmployeeCount:         c.employeeCount,
 		RevenuePerTickMicros:  p.RevenuePerTickMicros,
 		GrossRevenueMicros:    p.GrossRevenueMicros,
 		OperatingCostsMicros:  p.OperatingCostsMicros,
+		EmployeeSalaryMicros:  p.EmployeeSalaryMicros,
+		MaintenanceMicros:     p.MaintenanceMicros,
 		MachineryCount:        c.machineryCount,
 		MachineryOutputMicros: p.MachineOutputMicros,
 		MachineryUpkeepMicros: p.MachineUpkeepMicros,
@@ -842,6 +927,7 @@ func (s *Service) BusinessState(ctx context.Context, userID string, seasonID, bu
 		OperationalHealthBps:  c.healthBps,
 		CashReserveMicros:     c.reserveMicros,
 		LastEvent:             c.lastEvent,
+		OwnedStakeBps:         ownedStakeBps,
 	}
 	return out, tx.Commit(ctx)
 }
@@ -914,6 +1000,7 @@ func (s *Service) HireEmployee(ctx context.Context, in HireEmployeeInput) error 
 	`, in.UserID, in.SeasonID).Scan(&balance); err != nil {
 		return err
 	}
+	cost = scaledHireCostMicros(cost, currentEmployees, 0)
 	if !hasPositiveBalanceAfterSpend(balance, cost) {
 		return ErrInsufficientFunds
 	}
@@ -965,8 +1052,6 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 	if strategy == "" {
 		strategy = "best_value"
 	}
-	outerOrderBy := strings.ReplaceAll(orderBy, "ec.", "")
-
 	const maxAttempts = 8
 	retryDelay := 75 * time.Millisecond
 	for attempt := 0; attempt < maxAttempts; attempt++ {
@@ -1016,7 +1101,7 @@ func (s *Service) HireEmployeesBulk(ctx context.Context, in BulkHireEmployeesInp
 			`, in.UserID, in.SeasonID).Scan(&balance); err != nil {
 				return err
 			}
-			shortlist, err := selectHireShortlistTx(ctx, tx, in.BusinessID, in.SeasonID, selectionLimit, orderBy, outerOrderBy, balance)
+			shortlist, err := selectHireShortlistTx(ctx, tx, in.BusinessID, in.SeasonID, currentEmployees, selectionLimit, orderBy, balance)
 			if err != nil {
 				return err
 			}
@@ -1132,8 +1217,6 @@ func (s *Service) QuoteHireEmployeesBulk(ctx context.Context, in BulkHireEmploye
 	if strategy == "" {
 		strategy = "best_value"
 	}
-	outerOrderBy := strings.ReplaceAll(orderBy, "ec.", "")
-
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return out, err
@@ -1174,7 +1257,7 @@ func (s *Service) QuoteHireEmployeesBulk(ctx context.Context, in BulkHireEmploye
 		return out, err
 	}
 
-	shortlist, err := selectHireShortlistTx(ctx, tx, in.BusinessID, in.SeasonID, selectionLimit, orderBy, outerOrderBy, balance)
+	shortlist, err := selectHireShortlistTx(ctx, tx, in.BusinessID, in.SeasonID, currentEmployees, selectionLimit, orderBy, balance)
 	if err != nil {
 		return out, err
 	}
@@ -1215,47 +1298,52 @@ func (s *Service) QuoteHireEmployeesBulk(ctx context.Context, in BulkHireEmploye
 }
 
 type hirePick struct {
-	ID      int64
-	Name    string
-	Role    string
-	Trait   string
-	Cost    int64
-	Revenue int64
-	Risk    int32
+	ID       int64
+	Name     string
+	Role     string
+	Trait    string
+	BaseCost int64
+	Cost     int64
+	Revenue  int64
+	Risk     int32
 }
 
-func selectHireShortlistTx(ctx context.Context, tx pgx.Tx, businessID, seasonID int64, selectionLimit int, orderBy, outerOrderBy string, balance int64) ([]hirePick, error) {
+func selectHireShortlistTx(ctx context.Context, tx pgx.Tx, businessID, seasonID int64, currentEmployees int64, selectionLimit int, orderBy string, balance int64) ([]hirePick, error) {
 	rows, err := tx.Query(ctx, `
-		WITH ranked AS (
-			SELECT ec.id, ec.full_name, ec.role, ec.trait, ec.hire_cost_micros, ec.revenue_per_tick_micros, ec.risk_bps,
-			       SUM(ec.hire_cost_micros) OVER (ORDER BY `+orderBy+`) AS running_cost
-			FROM game.employee_candidates ec
-			LEFT JOIN game.business_employees be
-				ON be.business_id = $1
-			   AND be.season_id = $2
-			   AND be.source_candidate_id = ec.id
-			WHERE ec.season_id = $2
-			  AND be.id IS NULL
-			ORDER BY `+orderBy+`
-			LIMIT $3
-		)
-		SELECT id, full_name, role, trait, hire_cost_micros, revenue_per_tick_micros, risk_bps
-		FROM ranked
-		WHERE $4 - running_cost > $5
-		ORDER BY `+outerOrderBy+`
-	`, businessID, seasonID, selectionLimit, balance, 0)
+		SELECT ec.id, ec.full_name, ec.role, ec.trait, ec.hire_cost_micros, ec.revenue_per_tick_micros, ec.risk_bps
+		FROM game.employee_candidates ec
+		LEFT JOIN game.business_employees be
+			ON be.business_id = $1
+		   AND be.season_id = $2
+		   AND be.source_candidate_id = ec.id
+		WHERE ec.season_id = $2
+		  AND be.id IS NULL
+		ORDER BY `+orderBy+`
+		LIMIT $3
+	`, businessID, seasonID, max64(int64(selectionLimit*8), int64(selectionLimit)))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
 	shortlist := make([]hirePick, 0, selectionLimit)
+	runningCost := int64(0)
+	hireIndex := 0
 	for rows.Next() {
 		var pick hirePick
-		if err := rows.Scan(&pick.ID, &pick.Name, &pick.Role, &pick.Trait, &pick.Cost, &pick.Revenue, &pick.Risk); err != nil {
+		if err := rows.Scan(&pick.ID, &pick.Name, &pick.Role, &pick.Trait, &pick.BaseCost, &pick.Revenue, &pick.Risk); err != nil {
 			return nil, err
 		}
+		pick.Cost = scaledHireCostMicros(pick.BaseCost, currentEmployees, hireIndex)
+		if !hasPositiveBalanceAfterSpend(balance-runningCost, pick.Cost) {
+			continue
+		}
+		runningCost += pick.Cost
 		shortlist = append(shortlist, pick)
+		hireIndex++
+		if len(shortlist) >= selectionLimit {
+			break
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1290,6 +1378,7 @@ func (s *Service) ListEmployeeCandidates(ctx context.Context, seasonID int64) ([
 			"role":                    role,
 			"trait":                   trait,
 			"hire_cost_micros":        cost,
+			"scaled_hire_cost_note":   "Actual hire cost scales up with current team size.",
 			"revenue_per_tick_micros": revenue,
 			"risk_bps":                risk,
 		})
@@ -1655,23 +1744,25 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 	defer tx.Rollback(ctx)
 
 	params := volatilityParams(volatility)
-	regime, err := currentRegimeTx(ctx, tx, seasonID)
+	world, err := s.evolveWorldStateTx(ctx, tx, seasonID)
 	if err != nil {
 		return err
 	}
+	regime := world.Regime
 	if s.nextFloat() < params.RegimeSwitchProb {
 		regime = randomRegime(s.nextFloat())
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO game.market_state (season_id, regime, updated_at)
-			VALUES ($1, $2, now())
-			ON CONFLICT (season_id) DO UPDATE SET regime = $2, updated_at = now()
+			UPDATE game.market_state
+			SET regime = $2, updated_at = now()
+			WHERE season_id = $1
 		`, seasonID, regime); err != nil {
 			return err
 		}
+		world.Regime = regime
 	}
 
 	rows, err := tx.Query(ctx, `
-		SELECT id, current_price_micros, anchor_price_micros
+		SELECT id, symbol, current_price_micros, anchor_price_micros
 		FROM game.stocks
 		WHERE season_id = $1
 		FOR UPDATE
@@ -1681,13 +1772,14 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 	}
 	type row struct {
 		id     int64
+		symbol string
 		price  int64
 		anchor int64
 	}
 	var stocks []row
 	for rows.Next() {
 		var r row
-		if err := rows.Scan(&r.id, &r.price, &r.anchor); err != nil {
+		if err := rows.Scan(&r.id, &r.symbol, &r.price, &r.anchor); err != nil {
 			rows.Close()
 			return err
 		}
@@ -1701,7 +1793,11 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 	const minPriceMicros = int64(10_000)                // 0.01 stonky
 	const maxPriceMicros = int64(2_000_000_000_000_000) // 2 trillion stonky
 	for _, st := range stocks {
+		region := stockRegion(st.symbol)
+		sector := stockSector(st.symbol)
 		anchorRet := (0.30 * regimeDrift(regime)) + params.AnchorNoiseScale*normalish(s.nextFloat())
+		anchorRet += regionTrend(world, region) * 0.12
+		anchorRet += policyDrift(world.PolicyFocus, sector) * 0.18
 		if s.nextFloat() < params.ShockProb*0.20 {
 			anchorRet += signedShock(s.nextFloat(), s.nextFloat(), params.ShockScale*0.40)
 		}
@@ -1714,6 +1810,8 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 		}
 
 		ret := regimeDrift(regime) + params.NoiseScale*normalish(s.nextFloat()) + meanReversion(st.price, st.anchor, params.MeanReversion)
+		ret += regionTrend(world, region) * 0.30
+		ret += policyDrift(world.PolicyFocus, sector) * 0.35
 		if s.nextFloat() < params.ShockProb {
 			ret += signedShock(s.nextFloat(), s.nextFloat(), params.ShockScale)
 		}
@@ -1764,6 +1862,15 @@ func (s *Service) RunMarketTick(ctx context.Context, seasonID int64, tickEvery t
 		return err
 	}
 	if err := updateSeasonPeakNetWorthTx(ctx, tx, seasonID); err != nil {
+		return err
+	}
+	if err := s.applyPlayerProgressionTx(ctx, tx, seasonID, world); err != nil {
+		return err
+	}
+	if err := recordWorldEventTx(ctx, tx, seasonID, "world", world.Headline, world.CatalystSummary); err != nil {
+		return err
+	}
+	if err := trimWorldEvents(ctx, tx, seasonID); err != nil {
 		return err
 	}
 
@@ -2032,12 +2139,20 @@ func clampNegativeBalancesTx(ctx context.Context, tx pgx.Tx, seasonID int64) err
 }
 
 func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, nextFloat func() float64) error {
+	world, err := loadMarketWorldStateTx(ctx, tx, seasonID)
+	if err != nil {
+		return err
+	}
 	rows, err := tx.Query(ctx, `
 		SELECT b.id,
 		       b.owner_user_id,
 		       b.base_revenue_micros,
 		       b.visibility,
 		       b.is_listed,
+		       b.primary_region,
+		       b.narrative_arc,
+		       b.narrative_focus,
+		       b.narrative_pressure_bps,
 		       b.strategy,
 		       b.marketing_level,
 		       b.rd_level,
@@ -2093,40 +2208,44 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 	}
 	defer rows.Close()
 	type businessCycle struct {
-		businessID      int64
-		userID          string
-		baseRevenue     int64
-		visibility      string
-		isListed        bool
-		strategy        string
-		marketingLevel  int32
-		rdLevel         int32
-		automationLevel int32
-		complianceLevel int32
-		brandBps        int32
-		healthBps       int32
-		reserveMicros   int64
-		employeeRevenue int64
-		employeeCount   int64
-		avgRiskBps      float64
-		opsCount        int64
-		engineerCount   int64
-		productCount    int64
-		salesCount      int64
-		growthCount     int64
-		financeCount    int64
-		legalCount      int64
-		designCount     int64
-		machineOutput   int64
-		machineUpkeep   int64
-		loanInterest    int64
+		businessID        int64
+		userID            string
+		baseRevenue       int64
+		visibility        string
+		isListed          bool
+		primaryRegion     string
+		narrativeArc      string
+		narrativeFocus    string
+		narrativePressure int32
+		strategy          string
+		marketingLevel    int32
+		rdLevel           int32
+		automationLevel   int32
+		complianceLevel   int32
+		brandBps          int32
+		healthBps         int32
+		reserveMicros     int64
+		employeeRevenue   int64
+		employeeCount     int64
+		avgRiskBps        float64
+		opsCount          int64
+		engineerCount     int64
+		productCount      int64
+		salesCount        int64
+		growthCount       int64
+		financeCount      int64
+		legalCount        int64
+		designCount       int64
+		machineOutput     int64
+		machineUpkeep     int64
+		loanInterest      int64
 	}
 	cycles := make([]businessCycle, 0)
 	for rows.Next() {
 		var c businessCycle
 		if err := rows.Scan(
 			&c.businessID, &c.userID, &c.baseRevenue,
-			&c.visibility, &c.isListed, &c.strategy, &c.marketingLevel, &c.rdLevel, &c.automationLevel, &c.complianceLevel,
+			&c.visibility, &c.isListed, &c.primaryRegion, &c.narrativeArc, &c.narrativeFocus, &c.narrativePressure, &c.strategy, &c.marketingLevel, &c.rdLevel, &c.automationLevel, &c.complianceLevel,
 			&c.brandBps, &c.healthBps, &c.reserveMicros,
 			&c.employeeRevenue, &c.employeeCount, &c.avgRiskBps,
 			&c.opsCount, &c.engineerCount, &c.productCount, &c.salesCount, &c.growthCount, &c.financeCount, &c.legalCount, &c.designCount,
@@ -2178,9 +2297,14 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		}
 		machineOutput := int64(math.Round(float64(c.machineOutput) * autoBoost))
 		machineUpkeep := int64(math.Round(float64(c.machineUpkeep) * (1 - upkeepCut) * team.MachineUpkeepFactor))
+		employeeSalary := employeeSalaryCostMicros(c.employeeCount, c.avgRiskBps, c.marketingLevel, c.rdLevel, c.automationLevel, c.complianceLevel)
+		maintenanceCost := businessMaintenanceCostMicros(c.employeeCount, 0, c.reserveMicros, c.automationLevel, c.complianceLevel)
 
 		gross := c.baseRevenue + employeeRevenue + machineOutput - machineUpkeep
 		gross = int64(math.Round(float64(gross) * marketingBoost * rdBoost * brandBoost * healthBoost * team.RevenueMultiplier))
+		gross = int64(math.Round(float64(gross) * (1 + regionTrend(world, c.primaryRegion)*0.35)))
+		gross = int64(math.Round(float64(gross) * (1 + policyDrift(world.PolicyFocus, businessPolicySubject(c.narrativeFocus))*0.45)))
+		gross = int64(math.Round(float64(gross) * (1 + float64(c.narrativePressure)/30000.0)))
 
 		if c.visibility == "public" {
 			gross = int64(math.Round(float64(gross) * 1.03))
@@ -2211,40 +2335,55 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		eventTag := ""
 		p := nextFloat()
 		launchChance := 0.008 + team.LaunchChanceBonus
-		demandChance := 0.010 + team.DemandChanceBonus
+		demandChance := 0.010 + team.DemandChanceBonus + maxFloat(0, regionTrend(world, c.primaryRegion))*0.5
 		viralChance := 0.020 + float64(c.marketingLevel)*0.0012 + team.ViralChanceBonus
-		crisisChance := 0.018 + riskFactor*0.07 + team.CrisisChanceBonus
+		crisisChance := 0.018 + riskFactor*0.07 + team.CrisisChanceBonus + maxFloat(0, -regionTrend(world, c.primaryRegion))*0.6
 		if p < launchChance {
 			bonus := int64(math.Round(float64(gross) * (0.12 + nextFloat()*0.10)))
 			gross += bonus
-			eventTag = "product_launch"
+			eventTag = "Product launch landed and momentum picked up"
 			if _, err := tx.Exec(ctx, `
 				UPDATE game.businesses
-				SET brand_bps = LEAST(20000, brand_bps + $1), operational_health_bps = LEAST(15000, operational_health_bps + $2), last_event = $3, updated_at = now()
-				WHERE id = $4 AND season_id = $5
-			`, 180, 90, eventTag, c.businessID, seasonID); err != nil {
+				SET brand_bps = LEAST(20000, brand_bps + $1),
+				    operational_health_bps = LEAST(15000, operational_health_bps + $2),
+				    narrative_pressure_bps = LEAST(12000, narrative_pressure_bps + $3),
+				    narrative_arc = 'breakout',
+				    last_event = $4,
+				    updated_at = now()
+				WHERE id = $5 AND season_id = $6
+			`, 180, 90, 450, eventTag, c.businessID, seasonID); err != nil {
 				return err
 			}
 		} else if p < launchChance+demandChance {
 			bonus := int64(math.Round(float64(gross) * (0.10 + nextFloat()*0.08)))
 			gross += bonus
-			eventTag = "demand_surge"
+			eventTag = "Demand surge hit the order book"
 			if _, err := tx.Exec(ctx, `
 				UPDATE game.businesses
-				SET brand_bps = LEAST(20000, brand_bps + $1), operational_health_bps = LEAST(15000, operational_health_bps + $2), last_event = $3, updated_at = now()
-				WHERE id = $4 AND season_id = $5
-			`, 130, 70, eventTag, c.businessID, seasonID); err != nil {
+				SET brand_bps = LEAST(20000, brand_bps + $1),
+				    operational_health_bps = LEAST(15000, operational_health_bps + $2),
+				    narrative_pressure_bps = LEAST(12000, narrative_pressure_bps + $3),
+				    narrative_arc = 'expansion',
+				    last_event = $4,
+				    updated_at = now()
+				WHERE id = $5 AND season_id = $6
+			`, 130, 70, 320, eventTag, c.businessID, seasonID); err != nil {
 				return err
 			}
 		} else if p < launchChance+demandChance+viralChance {
 			bonus := int64(math.Round(float64(gross) * (0.08 + nextFloat()*0.15)))
 			gross += bonus
-			eventTag = "viral_breakout"
+			eventTag = "Narrative breakout pushed the company into the spotlight"
 			if _, err := tx.Exec(ctx, `
 				UPDATE game.businesses
-				SET brand_bps = LEAST(20000, brand_bps + $1), operational_health_bps = LEAST(15000, operational_health_bps + $2), last_event = $3, updated_at = now()
-				WHERE id = $4 AND season_id = $5
-			`, 240, 120, eventTag, c.businessID, seasonID); err != nil {
+				SET brand_bps = LEAST(20000, brand_bps + $1),
+				    operational_health_bps = LEAST(15000, operational_health_bps + $2),
+				    narrative_pressure_bps = LEAST(12000, narrative_pressure_bps + $3),
+				    narrative_arc = 'breakout',
+				    last_event = $4,
+				    updated_at = now()
+				WHERE id = $5 AND season_id = $6
+			`, 240, 120, 600, eventTag, c.businessID, seasonID); err != nil {
 				return err
 			}
 		} else if p < launchChance+demandChance+viralChance+crisisChance {
@@ -2253,12 +2392,17 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 			if gross < 0 {
 				gross = 0
 			}
-			eventTag = "pr_crisis"
+			eventTag = "Political and operating pressure triggered a company crisis"
 			if _, err := tx.Exec(ctx, `
 				UPDATE game.businesses
-				SET brand_bps = GREATEST(5000, brand_bps - $1), operational_health_bps = GREATEST(5000, operational_health_bps - $2), last_event = $3, updated_at = now()
-				WHERE id = $4 AND season_id = $5
-			`, 280, 220, eventTag, c.businessID, seasonID); err != nil {
+				SET brand_bps = GREATEST(5000, brand_bps - $1),
+				    operational_health_bps = GREATEST(5000, operational_health_bps - $2),
+				    narrative_pressure_bps = GREATEST(0, narrative_pressure_bps - $3),
+				    narrative_arc = 'fragile',
+				    last_event = $4,
+				    updated_at = now()
+				WHERE id = $5 AND season_id = $6
+			`, 280, 220, 420, eventTag, c.businessID, seasonID); err != nil {
 				return err
 			}
 		} else {
@@ -2267,7 +2411,9 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 				UPDATE game.businesses
 				SET brand_bps = CASE WHEN $1 THEN LEAST(20000, brand_bps + 20) ELSE GREATEST(5000, brand_bps - 10) END,
 				    operational_health_bps = CASE WHEN $1 THEN LEAST(15000, operational_health_bps + 15) ELSE GREATEST(5000, operational_health_bps - 18) END,
-				    last_event = '',
+				    narrative_pressure_bps = CASE WHEN $1 THEN LEAST(12000, narrative_pressure_bps + 40) ELSE GREATEST(0, narrative_pressure_bps - 90) END,
+				    narrative_arc = CASE WHEN $1 THEN narrative_arc ELSE 'turnaround' END,
+				    last_event = CASE WHEN $1 THEN 'Execution stayed on plan this tick' ELSE 'The company is working through a messy patch' END,
 				    updated_at = now()
 				WHERE id = $2 AND season_id = $3
 			`, profitable, c.businessID, seasonID); err != nil {
@@ -2328,7 +2474,7 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 			}
 		}
 
-		net := gross - riskPenalty - c.loanInterest - upgradeBurn + reserveYield
+		net := gross - riskPenalty - employeeSalary - maintenanceCost - c.loanInterest - upgradeBurn + reserveYield
 		if net < 0 && c.reserveMicros > 0 {
 			cover := -net
 			if cover > c.reserveMicros {
@@ -2343,7 +2489,24 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 				return err
 			}
 		}
-		netByUser[c.userID] += net
+		stakes, err := loadBusinessStakesTx(ctx, tx, c.businessID, seasonID)
+		if err != nil {
+			return err
+		}
+		if len(stakes) == 0 {
+			netByUser[c.userID] += net
+		} else {
+			remaining := net
+			for idx, stake := range stakes {
+				share := int64(math.Round(float64(net) * float64(stake.StakeBps) / 10000.0))
+				if idx == len(stakes)-1 {
+					share = remaining
+				} else {
+					remaining -= share
+				}
+				netByUser[stake.UserID] += share
+			}
+		}
 	}
 
 	for userID, delta := range netByUser {

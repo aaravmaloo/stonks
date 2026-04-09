@@ -8,6 +8,8 @@ type Dashboard struct {
 	BalanceMicros      int64          `json:"balance_micros"`
 	NetWorthMicros     int64          `json:"net_worth_micros"`
 	PeakNetWorthMicros int64          `json:"peak_net_worth_micros"`
+	Progression        PlayerProgress `json:"progression"`
+	World              WorldView      `json:"world"`
 	Positions          []PositionView `json:"positions"`
 	Businesses         []BusinessView `json:"businesses"`
 }
@@ -34,11 +36,17 @@ type BusinessView struct {
 	Visibility            string `json:"visibility"`
 	IsListed              bool   `json:"is_listed"`
 	StockSymbol           string `json:"stock_symbol,omitempty"`
+	PrimaryRegion         string `json:"primary_region"`
+	NarrativeArc          string `json:"narrative_arc"`
+	NarrativeFocus        string `json:"narrative_focus"`
+	NarrativePressureBps  int32  `json:"narrative_pressure_bps"`
 	EmployeeLimit         int64  `json:"employee_limit"`
 	EmployeeCount         int64  `json:"employee_count"`
 	RevenuePerTickMicros  int64  `json:"revenue_per_tick_micros"`
 	GrossRevenueMicros    int64  `json:"gross_revenue_micros"`
 	OperatingCostsMicros  int64  `json:"operating_costs_micros"`
+	EmployeeSalaryMicros  int64  `json:"employee_salary_micros"`
+	MaintenanceMicros     int64  `json:"maintenance_micros"`
 	MachineryCount        int64  `json:"machinery_count"`
 	MachineryOutputMicros int64  `json:"machinery_output_micros"`
 	MachineryUpkeepMicros int64  `json:"machinery_upkeep_micros"`
@@ -52,6 +60,58 @@ type BusinessView struct {
 	OperationalHealthBps  int32  `json:"operational_health_bps"`
 	CashReserveMicros     int64  `json:"cash_reserve_micros"`
 	LastEvent             string `json:"last_event"`
+	OwnedStakeBps         int32  `json:"owned_stake_bps"`
+}
+
+type StakeView struct {
+	BusinessID           int64  `json:"business_id"`
+	BusinessName         string `json:"business_name"`
+	ControllerUsername   string `json:"controller_username"`
+	PrimaryRegion        string `json:"primary_region"`
+	NarrativeArc         string `json:"narrative_arc"`
+	StakeBps             int32  `json:"stake_bps"`
+	RevenueShareMicros   int64  `json:"revenue_share_micros"`
+	EstimatedValueMicros int64  `json:"estimated_value_micros"`
+	CostBasisMicros      int64  `json:"cost_basis_micros"`
+	UnrealizedPLMicros   int64  `json:"unrealized_pl_micros"`
+	LastEvent            string `json:"last_event"`
+}
+
+type PlayerProgress struct {
+	ReputationScore         int32  `json:"reputation_score"`
+	ReputationTitle         string `json:"reputation_title"`
+	CurrentProfitStreak     int32  `json:"current_profit_streak"`
+	BestProfitStreak        int32  `json:"best_profit_streak"`
+	RiskAppetiteBps         int32  `json:"risk_appetite_bps"`
+	LastNetWorthDeltaMicros int64  `json:"last_net_worth_delta_micros"`
+	LastRiskPayoutMicros    int64  `json:"last_risk_payout_micros"`
+	LastStreakRewardMicros  int64  `json:"last_streak_reward_micros"`
+	NextStreakTarget        int32  `json:"next_streak_target"`
+}
+
+type WorldView struct {
+	Regime                 string           `json:"regime"`
+	PoliticalClimate       string           `json:"political_climate"`
+	PolicyFocus            string           `json:"policy_focus"`
+	CatalystName           string           `json:"catalyst_name"`
+	CatalystSummary        string           `json:"catalyst_summary"`
+	CatalystTicksRemaining int32            `json:"catalyst_ticks_remaining"`
+	Headline               string           `json:"headline"`
+	RiskRewardBiasBps      int32            `json:"risk_reward_bias_bps"`
+	Regions                []RegionView     `json:"regions"`
+	RecentEvents           []WorldEventView `json:"recent_events"`
+}
+
+type RegionView struct {
+	Name     string `json:"name"`
+	TrendBps int32  `json:"trend_bps"`
+}
+
+type WorldEventView struct {
+	Category      string    `json:"category"`
+	Headline      string    `json:"headline"`
+	ImpactSummary string    `json:"impact_summary"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type StockView struct {
@@ -185,6 +245,15 @@ type FundOrderInput struct {
 	Side           string
 	Units          int64
 	IdempotencyKey string
+}
+
+type TransferBusinessStakeInput struct {
+	UserID            string
+	SeasonID          int64
+	BusinessID        int64
+	RecipientUsername string
+	StakeBps          int32
+	IdempotencyKey    string
 }
 
 type LeaderboardRow struct {

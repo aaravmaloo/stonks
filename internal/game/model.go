@@ -23,6 +23,8 @@ const (
 	BaseBusinessEmployeeLimit = int64(60_000)
 	SeatUpgradeIncrement      = int64(10_000)
 	MaxBusinessEmployees      = int64(250_000)
+
+	EmployeeHireGrowthRate = 0.06977530584830441 // exp(rate*99) ~= 1000
 )
 
 var (
@@ -81,4 +83,35 @@ func hasPositiveBalanceAfterSpend(balanceMicros, spendMicros int64) bool {
 		return true
 	}
 	return balanceMicros-spendMicros > 0
+}
+
+func scaledHireCostMicros(baseCost int64, currentEmployees int64, hireIndex int) int64 {
+	if baseCost <= 0 {
+		return 0
+	}
+	step := float64(currentEmployees) + float64(hireIndex)
+	multiplier := math.Exp(step * EmployeeHireGrowthRate)
+	if multiplier > 2000 {
+		multiplier = 2000
+	}
+	return int64(math.Round(float64(baseCost) * multiplier))
+}
+
+func employeeSalaryCostMicros(employeeCount int64, avgRiskBps float64, marketingLevel, rdLevel, automationLevel, complianceLevel int32) int64 {
+	if employeeCount <= 0 {
+		return 0
+	}
+	basePerHead := 7.0 + float64(marketingLevel+rdLevel+automationLevel+complianceLevel)*0.45
+	riskPremium := avgRiskBps / 4500.0
+	return int64(math.Round(float64(employeeCount) * (basePerHead + riskPremium) * float64(MicrosPerStonky)))
+}
+
+func businessMaintenanceCostMicros(employeeCount, machineryCount int64, reserveMicros int64, automationLevel, complianceLevel int32) int64 {
+	base := float64(employeeCount)*1.35 + float64(machineryCount)*18.0
+	base += float64(reserveMicros) / float64(250*MicrosPerStonky)
+	reduction := 1.0 - math.Min(0.32, float64(automationLevel)*0.02+float64(complianceLevel)*0.01)
+	if reduction < 0.55 {
+		reduction = 0.55
+	}
+	return int64(math.Round(base * reduction * float64(MicrosPerStonky)))
 }

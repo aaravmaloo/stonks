@@ -85,6 +85,15 @@ func (c *Client) ListStakes(ctx context.Context, accessToken string) (map[string
 	return out, err
 }
 
+func (c *Client) TransferStonky(ctx context.Context, accessToken, username, idem string, amountMicros int64) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, "/v1/transfer", accessToken, map[string]any{
+		"username":      username,
+		"amount_micros": amountMicros,
+	}, &out, idem)
+	return out, err
+}
+
 func (c *Client) ListStocks(ctx context.Context, accessToken string, all bool) (map[string]any, error) {
 	path := "/v1/stocks"
 	if all {
@@ -255,6 +264,15 @@ func (c *Client) SellBusinessToBank(ctx context.Context, accessToken string, bus
 func (c *Client) TransferBusinessStake(ctx context.Context, accessToken string, businessID int64, username string, stakeBps int32, idem string) (map[string]any, error) {
 	var out map[string]any
 	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/stakes/give", businessID), accessToken, map[string]any{
+		"username":  username,
+		"stake_bps": stakeBps,
+	}, &out, idem)
+	return out, err
+}
+
+func (c *Client) RevokeBusinessStake(ctx context.Context, accessToken string, businessID int64, username string, stakeBps int32, idem string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/stakes/revoke", businessID), accessToken, map[string]any{
 		"username":  username,
 		"stake_bps": stakeBps,
 	}, &out, idem)

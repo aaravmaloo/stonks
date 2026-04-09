@@ -65,6 +65,17 @@ func (s *adminStore) SetPeak(ctx context.Context, userID string, amountMicros in
 	return out, err
 }
 
+func (s *adminStore) SetPlayerProgress(ctx context.Context, userID string, reputationScore, currentStreak, bestStreak, riskAppetiteBps int32) (playerRow, error) {
+	var out playerRow
+	err := s.jsonRequest(ctx, http.MethodPost, "/v1/admin/players/"+url.PathEscape(strings.TrimSpace(userID))+"/progress", map[string]any{
+		"reputation_score":      reputationScore,
+		"current_profit_streak": currentStreak,
+		"best_profit_streak":    bestStreak,
+		"risk_appetite_bps":     riskAppetiteBps,
+	}, &out)
+	return out, err
+}
+
 func (s *adminStore) SetActiveBusiness(ctx context.Context, userID string, businessID int64) (playerRow, error) {
 	var out playerRow
 	err := s.jsonRequest(ctx, http.MethodPost, "/v1/admin/players/"+url.PathEscape(strings.TrimSpace(userID))+"/active-business", map[string]any{
@@ -113,6 +124,36 @@ func (s *adminStore) SetBusinessRevenue(ctx context.Context, businessID int64, a
 	return out, err
 }
 
+func (s *adminStore) SetBusinessNarrative(ctx context.Context, businessID int64, region, arc, focus string, pressureBps int32) (businessRow, error) {
+	var out businessRow
+	err := s.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/admin/businesses/%d/narrative", businessID), map[string]any{
+		"primary_region":         region,
+		"narrative_arc":          arc,
+		"narrative_focus":        focus,
+		"narrative_pressure_bps": pressureBps,
+	}, &out)
+	return out, err
+}
+
+func (s *adminStore) ListBusinessStakes(ctx context.Context, businessID int64) ([]stakeRow, error) {
+	var out struct {
+		Stakes []stakeRow `json:"stakes"`
+	}
+	err := s.jsonRequest(ctx, http.MethodGet, fmt.Sprintf("/v1/admin/businesses/%d/stakes", businessID), nil, &out)
+	return out.Stakes, err
+}
+
+func (s *adminStore) SetBusinessStake(ctx context.Context, businessID int64, username string, stakeBps int32) ([]stakeRow, error) {
+	var out struct {
+		Stakes []stakeRow `json:"stakes"`
+	}
+	err := s.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/admin/businesses/%d/stakes", businessID), map[string]any{
+		"username":  username,
+		"stake_bps": stakeBps,
+	}, &out)
+	return out.Stakes, err
+}
+
 func (s *adminStore) DeleteBusiness(ctx context.Context, businessID int64) error {
 	return s.jsonRequest(ctx, http.MethodDelete, fmt.Sprintf("/v1/admin/businesses/%d", businessID), nil, nil)
 }
@@ -155,6 +196,18 @@ func (s *adminStore) SetStockPrice(ctx context.Context, symbol string, priceMicr
 	err := s.jsonRequest(ctx, http.MethodPost, "/v1/admin/stocks/"+url.PathEscape(strings.ToUpper(symbol))+"/price", map[string]any{
 		"price_micros": priceMicros,
 	}, &out)
+	return out, err
+}
+
+func (s *adminStore) WorldState(ctx context.Context) (worldRow, error) {
+	var out worldRow
+	err := s.jsonRequest(ctx, http.MethodGet, "/v1/admin/world", nil, &out)
+	return out, err
+}
+
+func (s *adminStore) SetWorldState(ctx context.Context, in worldRow) (worldRow, error) {
+	var out worldRow
+	err := s.jsonRequest(ctx, http.MethodPost, "/v1/admin/world", in, &out)
 	return out, err
 }
 

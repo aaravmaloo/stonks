@@ -27,20 +27,25 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 		fmt.Println("4. Set peak")
 		fmt.Println("5. Set active business")
 		fmt.Println("6. List businesses")
-		fmt.Println("7. Rename business")
-		fmt.Println("8. Set business visibility")
-		fmt.Println("9. Set business listed")
-		fmt.Println("10. Set business revenue")
-		fmt.Println("11. Delete business")
-		fmt.Println("12. List positions")
-		fmt.Println("13. Set position")
-		fmt.Println("14. Delete position")
-		fmt.Println("15. List stocks")
-		fmt.Println("16. Set stock price")
-		fmt.Println("17. Switch player")
-		fmt.Println("18. Quit")
+		fmt.Println("7. Set player progress")
+		fmt.Println("8. Rename business")
+		fmt.Println("9. Set business visibility")
+		fmt.Println("10. Set business listed")
+		fmt.Println("11. Set business revenue")
+		fmt.Println("12. Set business narrative")
+		fmt.Println("13. List business stakes")
+		fmt.Println("14. Set business stake")
+		fmt.Println("15. Delete business")
+		fmt.Println("16. List positions")
+		fmt.Println("17. Set position")
+		fmt.Println("18. Delete position")
+		fmt.Println("19. List stocks")
+		fmt.Println("20. Set stock price")
+		fmt.Println("21. Show world")
+		fmt.Println("22. Switch player")
+		fmt.Println("23. Quit")
 
-		choice, err := promptChoice("Select action", 18)
+		choice, err := promptChoice("Select action", 23)
 		if err != nil {
 			return err
 		}
@@ -107,6 +112,28 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			}
 			printBusinesses(rows)
 		case 7:
+			reputation, err := promptInt64("Reputation score")
+			if err != nil {
+				return err
+			}
+			currentStreak, err := promptInt64("Current streak")
+			if err != nil {
+				return err
+			}
+			bestStreak, err := promptInt64("Best streak")
+			if err != nil {
+				return err
+			}
+			riskBps, err := promptInt64("Risk appetite bps")
+			if err != nil {
+				return err
+			}
+			row, err := store.SetPlayerProgress(ctx, currentUserID, int32(reputation), int32(currentStreak), int32(bestStreak), int32(riskBps))
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Progress -> rep=%d streak=%d/%d risk=%d\n", row.ReputationScore, row.CurrentProfitStreak, row.BestProfitStreak, row.RiskAppetiteBps)
+		case 8:
 			businessID, err := promptInt64("Business ID")
 			if err != nil {
 				return err
@@ -120,7 +147,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 				return err
 			}
 			fmt.Printf("Business %d renamed to %q\n", row.ID, row.Name)
-		case 8:
+		case 9:
 			businessID, err := promptInt64("Business ID")
 			if err != nil {
 				return err
@@ -134,7 +161,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 				return err
 			}
 			fmt.Printf("Business %d visibility -> %s\n", row.ID, row.Visibility)
-		case 9:
+		case 10:
 			businessID, err := promptInt64("Business ID")
 			if err != nil {
 				return err
@@ -148,7 +175,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 				return err
 			}
 			fmt.Printf("Business %d listed -> %t\n", row.ID, row.IsListed)
-		case 10:
+		case 11:
 			businessID, err := promptInt64("Business ID")
 			if err != nil {
 				return err
@@ -162,7 +189,61 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 				return err
 			}
 			fmt.Printf("Business %d revenue -> %s stonky\n", row.ID, formatMicros(row.BaseRevenueMicros))
-		case 11:
+		case 12:
+			businessID, err := promptInt64("Business ID")
+			if err != nil {
+				return err
+			}
+			region, err := promptRequired("Primary region")
+			if err != nil {
+				return err
+			}
+			arc, err := promptRequired("Narrative arc")
+			if err != nil {
+				return err
+			}
+			focus, err := promptRequired("Narrative focus")
+			if err != nil {
+				return err
+			}
+			pressure, err := promptInt64("Narrative pressure bps")
+			if err != nil {
+				return err
+			}
+			row, err := store.SetBusinessNarrative(ctx, businessID, region, arc, focus, int32(pressure))
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Business %d narrative -> %s %s %s %d\n", row.ID, row.PrimaryRegion, row.NarrativeArc, row.NarrativeFocus, row.NarrativePressureBps)
+		case 13:
+			businessID, err := promptInt64("Business ID")
+			if err != nil {
+				return err
+			}
+			rows, err := store.ListBusinessStakes(ctx, businessID)
+			if err != nil {
+				return err
+			}
+			printStakes(rows)
+		case 14:
+			businessID, err := promptInt64("Business ID")
+			if err != nil {
+				return err
+			}
+			username, err := promptRequired("Username")
+			if err != nil {
+				return err
+			}
+			percent, err := promptFloat("Stake percent")
+			if err != nil {
+				return err
+			}
+			rows, err := store.SetBusinessStake(ctx, businessID, username, int32(math.Round(percent*100)))
+			if err != nil {
+				return err
+			}
+			printStakes(rows)
+		case 15:
 			businessID, err := promptInt64("Business ID")
 			if err != nil {
 				return err
@@ -178,13 +259,13 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err := store.DeleteBusiness(ctx, businessID); err != nil {
 				return err
 			}
-		case 12:
+		case 16:
 			rows, err := store.ListPositionsByUser(ctx, currentUserID)
 			if err != nil {
 				return err
 			}
 			printPositions(rows)
-		case 13:
+		case 17:
 			symbol, err := promptRequired("Stock symbol")
 			if err != nil {
 				return err
@@ -202,7 +283,7 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 				return err
 			}
 			fmt.Printf("Position -> %s %0.4f @ %s stonky\n", row.Symbol, game.UnitsToShares(row.QuantityUnits), formatMicros(row.AvgPriceMicros))
-		case 14:
+		case 18:
 			symbol, err := promptRequired("Stock symbol")
 			if err != nil {
 				return err
@@ -210,13 +291,13 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 			if err := store.DeletePosition(ctx, currentUserID, strings.ToUpper(symbol)); err != nil {
 				return err
 			}
-		case 15:
+		case 19:
 			rows, err := store.ListStocks(ctx)
 			if err != nil {
 				return err
 			}
 			printStocks(rows)
-		case 16:
+		case 20:
 			symbol, err := promptRequired("Stock symbol")
 			if err != nil {
 				return err
@@ -230,13 +311,19 @@ func runSelectLoop(ctx context.Context, store *adminStore, userID string) error 
 				return err
 			}
 			fmt.Printf("Stock %s -> %s stonky\n", row.Symbol, formatMicros(row.CurrentPriceMicros))
-		case 17:
+		case 21:
+			row, err := store.WorldState(ctx)
+			if err != nil {
+				return err
+			}
+			printWorld(row)
+		case 22:
 			nextUserID, err := promptRequired("Player user ID")
 			if err != nil {
 				return err
 			}
 			currentUserID = nextUserID
-		case 18:
+		case 23:
 			return nil
 		}
 	}
@@ -252,6 +339,9 @@ func printPlayerSummary(ctx context.Context, store *adminStore, userID string) e
 	fmt.Printf("Invite: %s\n", row.InviteCode)
 	fmt.Printf("Balance: %s stonky\n", formatMicros(row.BalanceMicros))
 	fmt.Printf("Peak: %s stonky\n", formatMicros(row.PeakNetWorthMicros))
+	fmt.Printf("Reputation: %d\n", row.ReputationScore)
+	fmt.Printf("Profit Streak: %d (best %d)\n", row.CurrentProfitStreak, row.BestProfitStreak)
+	fmt.Printf("Risk Appetite: %d bps\n", row.RiskAppetiteBps)
 	if row.ActiveBusinessID == nil {
 		fmt.Println("Active Business: none")
 	} else {
@@ -265,17 +355,18 @@ func printPlayers(rows []playerRow) {
 		fmt.Println("No players found.")
 		return
 	}
-	fmt.Printf("%-26s  %-18s  %-16s  %-14s  %-14s\n", "USER ID", "USERNAME", "BALANCE", "PEAK", "ACTIVE BIZ")
+	fmt.Printf("%-26s  %-18s  %-16s  %-14s  %-10s  %-14s\n", "USER ID", "USERNAME", "BALANCE", "PEAK", "REPUTATION", "ACTIVE BIZ")
 	for _, row := range rows {
 		active := "-"
 		if row.ActiveBusinessID != nil {
 			active = strconv.FormatInt(*row.ActiveBusinessID, 10)
 		}
-		fmt.Printf("%-26s  %-18s  %16s  %14s  %-14s\n",
+		fmt.Printf("%-26s  %-18s  %16s  %14s  %-10d  %-14s\n",
 			truncate(row.UserID, 26),
 			truncate(row.Username, 18),
 			formatMicros(row.BalanceMicros),
 			formatMicros(row.PeakNetWorthMicros),
+			row.ReputationScore,
 			active,
 		)
 	}
@@ -286,16 +377,46 @@ func printBusinesses(rows []businessRow) {
 		fmt.Println("No businesses found.")
 		return
 	}
-	fmt.Printf("%-6s  %-24s  %-8s  %-6s  %-14s\n", "ID", "NAME", "VIS", "LIST", "BASE REV")
+	fmt.Printf("%-6s  %-20s  %-8s  %-6s  %-10s  %-10s  %-9s\n", "ID", "NAME", "VIS", "LIST", "REGION", "ARC", "PRESSURE")
 	for _, row := range rows {
-		fmt.Printf("%-6d  %-24s  %-8s  %-6t  %14s\n",
+		fmt.Printf("%-6d  %-20s  %-8s  %-6t  %-10s  %-10s  %9d\n",
 			row.ID,
-			truncate(row.Name, 24),
+			truncate(row.Name, 20),
 			row.Visibility,
 			row.IsListed,
-			formatMicros(row.BaseRevenueMicros),
+			truncate(row.PrimaryRegion, 10),
+			truncate(row.NarrativeArc, 10),
+			row.NarrativePressureBps,
 		)
 	}
+}
+
+func printStakes(rows []stakeRow) {
+	if len(rows) == 0 {
+		fmt.Println("No stakes found.")
+		return
+	}
+	fmt.Printf("%-6s  %-18s  %-18s  %-10s  %-12s\n", "BIZ", "USER ID", "USERNAME", "STAKE", "COST BASIS")
+	for _, row := range rows {
+		fmt.Printf("%-6d  %-18s  %-18s  %9.2f%%  %12s\n",
+			row.BusinessID,
+			truncate(row.UserID, 18),
+			truncate(row.Username, 18),
+			float64(row.StakeBps)/100.0,
+			formatMicros(row.CostBasisMicros),
+		)
+	}
+}
+
+func printWorld(row worldRow) {
+	fmt.Printf("Regime: %s\n", row.Regime)
+	fmt.Printf("Politics: %s\n", row.PoliticalClimate)
+	fmt.Printf("Policy Focus: %s\n", row.PolicyFocus)
+	fmt.Printf("Catalyst: %s (%d ticks)\n", row.CatalystName, row.CatalystTicksRemaining)
+	fmt.Printf("Headline: %s\n", row.Headline)
+	fmt.Printf("Summary: %s\n", row.CatalystSummary)
+	fmt.Printf("Regions: americas=%d europe=%d asia=%d\n", row.AmericasBps, row.EuropeBps, row.AsiaBps)
+	fmt.Printf("Risk Bias: %d\n", row.RiskRewardBiasBps)
 }
 
 func printPositions(rows []positionRow) {

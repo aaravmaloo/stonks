@@ -52,6 +52,8 @@ func main() {
 		newLoginCmd(&apiBase),
 		newLogoutCmd(),
 		newDashCmd(&apiBase),
+		newWorldCmd(&apiBase),
+		newStakesCmd(&apiBase),
 		newSyncCmd(&apiBase),
 		newStocksCmd(&apiBase),
 		newFundsCmd(&apiBase),
@@ -229,6 +231,94 @@ func newSyncCmd(apiBase *string) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newWorldCmd(apiBase *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "world",
+		Short: "Show the political climate, catalyst, and global markets",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			client := newClient(apiBase)
+			out, err := client.World(ctx, sess.AccessToken)
+			if err != nil {
+				return err
+			}
+			return renderWorld(out)
+		},
+	}
+}
+
+func newStakesCmd(apiBase *string) *cobra.Command {
+	stakes := &cobra.Command{
+		Use:   "stakes",
+		Short: "View and transfer business stakes",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			client := newClient(apiBase)
+			out, err := client.ListStakes(ctx, sess.AccessToken)
+			if err != nil {
+				return err
+			}
+			return renderStakes(out)
+		},
+	}
+	stakes.AddCommand(&cobra.Command{
+		Use:   "give [business_id] [username] [percent]",
+		Short: "Give part of your company stake to another player",
+		Args:  cobra.MaximumNArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			businessID, err := int64FromArgOrPrompt(cmd.Context(), apiBase, args, 0, "Business ID")
+			if err != nil {
+				return err
+			}
+			username := ""
+			if len(args) >= 2 {
+				username = strings.TrimSpace(args[1])
+			} else {
+				username, err = promptRequired("Recipient username")
+				if err != nil {
+					return err
+				}
+			}
+			percent := 0.0
+			if len(args) >= 3 {
+				percent, err = strconv.ParseFloat(strings.TrimSpace(args[2]), 64)
+				if err != nil {
+					return fmt.Errorf("percent must be a valid number")
+				}
+			} else {
+				percent, err = promptFloat("Stake percent", 0)
+				if err != nil {
+					return err
+				}
+			}
+			stakeBps := int32(math.Round(percent * 100))
+			client := newClient(apiBase)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			out, err := client.TransferBusinessStake(ctx, sess.AccessToken, businessID, username, stakeBps, uuid.NewString())
+			if err != nil {
+				return err
+			}
+			return renderSimpleOK(out, fmt.Sprintf("Gave %.2f%% of business %d to %s.", percent, businessID, username))
+		},
+	})
+	return stakes
 }
 
 func newStocksCmd(apiBase *string) *cobra.Command {

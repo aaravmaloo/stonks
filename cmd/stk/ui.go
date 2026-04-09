@@ -51,6 +51,12 @@ type leaderboardPayload struct {
 	Rows []game.LeaderboardRow `json:"rows"`
 }
 
+type worldPayload = game.WorldView
+
+type stakesPayload struct {
+	Stakes []game.StakeView `json:"stakes"`
+}
+
 type createBusinessPayload struct {
 	ID int64 `json:"id"`
 }
@@ -262,6 +268,23 @@ func renderDashboard(raw map[string]any) error {
 	fmt.Printf("P/L vs Start:       %s stonky\n", colorizeMicros(startingPL))
 	fmt.Printf("Open Position P/L:  %s stonky\n", colorizeMicros(openPL))
 	fmt.Printf("From Peak:          %s stonky\n", colorizeMicros(downFromPeak))
+	fmt.Printf("Reputation:         %s (%d/10000)\n", d.Progression.ReputationTitle, d.Progression.ReputationScore)
+	fmt.Printf("Profit Streak:      %d ticks (best %d, next reward %d)\n", d.Progression.CurrentProfitStreak, d.Progression.BestProfitStreak, d.Progression.NextStreakTarget)
+	fmt.Printf("Risk Appetite:      %.2f%%\n", float64(d.Progression.RiskAppetiteBps)/100)
+	fmt.Printf("Last Tick Delta:    %s stonky\n", colorizeMicros(d.Progression.LastNetWorthDeltaMicros))
+	fmt.Printf("Risk Payout:        %s stonky\n", colorizeMicros(d.Progression.LastRiskPayoutMicros))
+	fmt.Printf("Streak Reward:      %s stonky\n", colorizeMicros(d.Progression.LastStreakRewardMicros))
+
+	fmt.Println()
+	accent.Println("World")
+	fmt.Printf("Regime:             %s\n", d.World.Regime)
+	fmt.Printf("Politics:           %s (%s)\n", d.World.PoliticalClimate, d.World.PolicyFocus)
+	fmt.Printf("Catalyst:           %s (%d ticks left)\n", d.World.CatalystName, d.World.CatalystTicksRemaining)
+	fmt.Printf("Plan:               %s\n", d.World.CatalystSummary)
+	fmt.Printf("Headline:           %s\n", d.World.Headline)
+	for _, region := range d.World.Regions {
+		fmt.Printf("Region %-10s %8s\n", region.Name+":", colorizePercent(float64(region.TrendBps)/100))
+	}
 
 	fmt.Println()
 	accent.Println("Positions")
@@ -415,17 +438,24 @@ func renderBusinessState(raw map[string]any) error {
 	fmt.Printf("Name:        %s\n", out.Name)
 	fmt.Printf("Visibility:  %s\n", out.Visibility)
 	fmt.Printf("Listed:      %t\n", out.IsListed)
+	fmt.Printf("Your Stake:  %.2f%%\n", float64(out.OwnedStakeBps)/100)
 	fmt.Printf("Strategy:    %s\n", out.Strategy)
 	fmt.Printf("Employees:   %d / %d\n", out.EmployeeCount, out.EmployeeLimit)
 	fmt.Printf("Machinery:   %d\n", out.MachineryCount)
 	if strings.TrimSpace(out.StockSymbol) != "" {
 		fmt.Printf("Stock:       %s\n", out.StockSymbol)
 	}
+	fmt.Printf("Region:      %s\n", out.PrimaryRegion)
+	fmt.Printf("Story Arc:   %s\n", out.NarrativeArc)
+	fmt.Printf("Story Focus: %s\n", out.NarrativeFocus)
+	fmt.Printf("Pressure:    %.2f%%\n", float64(out.NarrativePressureBps)/100)
 	fmt.Printf("Upgrades:    mkt=%d rd=%d auto=%d comp=%d\n", out.MarketingLevel, out.RDLevel, out.AutomationLevel, out.ComplianceLevel)
 	fmt.Printf("Brand:       %.2f%%\n", float64(out.BrandBps)/100)
 	fmt.Printf("Op Health:   %.2f%%\n", float64(out.OperationalHealthBps)/100)
 	fmt.Printf("Reserve:     %s stonky\n", formatMicros(out.CashReserveMicros))
 	fmt.Printf("Revenue/tick:%s stonky\n", formatMicros(out.RevenuePerTickMicros))
+	fmt.Printf("Salary/tick: %s stonky\n", formatMicros(out.EmployeeSalaryMicros))
+	fmt.Printf("Maint/tick:  %s stonky\n", formatMicros(out.MaintenanceMicros))
 	fmt.Printf("Mach output: %s stonky\n", formatMicros(out.MachineryOutputMicros))
 	fmt.Printf("Mach upkeep: %s stonky\n", formatMicros(out.MachineryUpkeepMicros))
 	fmt.Printf("Loan debt:   %s stonky\n", formatMicros(out.LoanOutstandingMicros))
@@ -577,6 +607,65 @@ func renderLeaderboard(raw map[string]any, title string) error {
 			truncate(row.Username, 18),
 			truncate(row.InviteCode, 12),
 			formatMicros(row.NetWorthMicros),
+		)
+	}
+	fmt.Println()
+	return nil
+}
+
+func renderWorld(raw map[string]any) error {
+	out, err := decodeInto[game.WorldView](raw)
+	if err != nil {
+		return err
+	}
+	accent.Println("\n== WORLD ==")
+	fmt.Printf("Regime:      %s\n", out.Regime)
+	fmt.Printf("Politics:    %s (%s)\n", out.PoliticalClimate, out.PolicyFocus)
+	fmt.Printf("Catalyst:    %s (%d ticks left)\n", out.CatalystName, out.CatalystTicksRemaining)
+	fmt.Printf("Summary:     %s\n", out.CatalystSummary)
+	fmt.Printf("Headline:    %s\n", out.Headline)
+	fmt.Printf("Risk Bias:   %s\n", colorizePercent(float64(out.RiskRewardBiasBps)/100))
+	if len(out.Regions) > 0 {
+		fmt.Println()
+		accent.Println("Global Markets")
+		for _, region := range out.Regions {
+			fmt.Printf("%-10s %10s\n", region.Name, colorizePercent(float64(region.TrendBps)/100))
+		}
+	}
+	if len(out.RecentEvents) > 0 {
+		fmt.Println()
+		accent.Println("Recent Events")
+		for _, event := range out.RecentEvents {
+			fmt.Printf("[%s] %s\n", strings.ToUpper(event.Category), event.Headline)
+			if strings.TrimSpace(event.ImpactSummary) != "" {
+				fmt.Printf("  %s\n", event.ImpactSummary)
+			}
+		}
+	}
+	fmt.Println()
+	return nil
+}
+
+func renderStakes(raw map[string]any) error {
+	out, err := decodeInto[stakesPayload](raw)
+	if err != nil {
+		return err
+	}
+	accent.Println("\n== STAKES ==")
+	if len(out.Stakes) == 0 {
+		printInfo("You do not own any business stakes yet.")
+		return nil
+	}
+	fmt.Printf("%-4s %-20s %-12s %-8s %12s %12s %12s\n", "ID", "BUSINESS", "CTRL", "STAKE", "REV/TICK", "VALUE", "P/L")
+	for _, stake := range out.Stakes {
+		fmt.Printf("%-4d %-20s %-12s %7.2f%% %12s %12s %12s\n",
+			stake.BusinessID,
+			truncate(stake.BusinessName, 20),
+			truncate(stake.ControllerUsername, 12),
+			float64(stake.StakeBps)/100.0,
+			formatMicros(stake.RevenueShareMicros),
+			formatMicros(stake.EstimatedValueMicros),
+			colorizeMicros(stake.UnrealizedPLMicros),
 		)
 	}
 	fmt.Println()

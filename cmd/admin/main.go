@@ -4,16 +4,17 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
 	adminapi "stanks/internal/admin"
 	"stanks/internal/config"
 	"stanks/internal/game"
-	"github.com/spf13/cobra"
 )
 
 type adminStore struct {
@@ -27,6 +28,8 @@ type playerRow = adminapi.Player
 type businessRow = adminapi.Business
 type positionRow = adminapi.Position
 type stockRow = adminapi.Stock
+type stakeRow = adminapi.Stake
+type worldRow = adminapi.WorldState
 
 var stdinReader = bufio.NewReader(os.Stdin)
 
@@ -62,18 +65,24 @@ func main() {
 		newSetBalanceCmd(store),
 		newChangePeakCmd(store),
 		newSetPeakCmd(store),
+		newSetPlayerProgressCmd(store),
 		newSetActiveBusinessCmd(store),
 		newListBusinessesCmd(store),
 		newSetBusinessNameCmd(store),
 		newSetBusinessVisibilityCmd(store),
 		newSetBusinessListedCmd(store),
 		newSetBusinessRevenueCmd(store),
+		newSetBusinessNarrativeCmd(store),
+		newListBusinessStakesCmd(store),
+		newSetBusinessStakeCmd(store),
 		newDeleteBusinessCmd(store),
 		newListPositionsCmd(store),
 		newSetPositionCmd(store),
 		newDeletePositionCmd(store),
 		newListStocksCmd(store),
 		newSetStockPriceCmd(store),
+		newWorldCmd(store),
+		newSetWorldCmd(store),
 		newSelectCmd(store),
 	)
 
@@ -205,6 +214,40 @@ func newSetPeakCmd(store *adminStore) *cobra.Command {
 				return err
 			}
 			fmt.Printf("Peak set for %s -> %s stonky\n", row.UserID, formatMicros(row.PeakNetWorthMicros))
+			return nil
+		},
+	}
+}
+
+func newSetPlayerProgressCmd(store *adminStore) *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-progress <user-id> <reputation> <current-streak> <best-streak> <risk-bps>",
+		Short: "Set player progression values",
+		Args:  cobra.ExactArgs(5),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			reputation, err := strconv.ParseInt(strings.TrimSpace(args[1]), 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid reputation")
+			}
+			currentStreak, err := strconv.ParseInt(strings.TrimSpace(args[2]), 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid current streak")
+			}
+			bestStreak, err := strconv.ParseInt(strings.TrimSpace(args[3]), 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid best streak")
+			}
+			riskBps, err := strconv.ParseInt(strings.TrimSpace(args[4]), 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid risk bps")
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			row, err := store.SetPlayerProgress(ctx, strings.TrimSpace(args[0]), int32(reputation), int32(currentStreak), int32(bestStreak), int32(riskBps))
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Progress updated for %s -> rep=%d streak=%d/%d risk=%d\n", row.UserID, row.ReputationScore, row.CurrentProfitStreak, row.BestProfitStreak, row.RiskAppetiteBps)
 			return nil
 		},
 	}
@@ -355,6 +398,80 @@ func newSetBusinessRevenueCmd(store *adminStore) *cobra.Command {
 	}
 }
 
+func newSetBusinessNarrativeCmd(store *adminStore) *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-business-narrative <business-id> <region> <arc> <focus> <pressure-bps>",
+		Short: "Set business region and narrative fields",
+		Args:  cobra.ExactArgs(5),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			businessID, err := strconv.ParseInt(strings.TrimSpace(args[0]), 10, 64)
+			if err != nil || businessID <= 0 {
+				return fmt.Errorf("business id must be > 0")
+			}
+			pressure, err := strconv.ParseInt(strings.TrimSpace(args[4]), 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid pressure bps")
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			row, err := store.SetBusinessNarrative(ctx, businessID, args[1], args[2], args[3], int32(pressure))
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Business %d narrative -> region=%s arc=%s focus=%s pressure=%d\n", row.ID, row.PrimaryRegion, row.NarrativeArc, row.NarrativeFocus, row.NarrativePressureBps)
+			return nil
+		},
+	}
+}
+
+func newListBusinessStakesCmd(store *adminStore) *cobra.Command {
+	return &cobra.Command{
+		Use:   "stakes <business-id>",
+		Short: "List stake ownership for a business",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			businessID, err := strconv.ParseInt(strings.TrimSpace(args[0]), 10, 64)
+			if err != nil || businessID <= 0 {
+				return fmt.Errorf("business id must be > 0")
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			rows, err := store.ListBusinessStakes(ctx, businessID)
+			if err != nil {
+				return err
+			}
+			printStakes(rows)
+			return nil
+		},
+	}
+}
+
+func newSetBusinessStakeCmd(store *adminStore) *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-stake <business-id> <username> <percent>",
+		Short: "Set a user's stake in a business and rebalance the owner stake",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			businessID, err := strconv.ParseInt(strings.TrimSpace(args[0]), 10, 64)
+			if err != nil || businessID <= 0 {
+				return fmt.Errorf("business id must be > 0")
+			}
+			percent, err := strconv.ParseFloat(strings.TrimSpace(args[2]), 64)
+			if err != nil {
+				return fmt.Errorf("invalid percent")
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			rows, err := store.SetBusinessStake(ctx, businessID, strings.TrimSpace(args[1]), int32(math.Round(percent*100)))
+			if err != nil {
+				return err
+			}
+			printStakes(rows)
+			return nil
+		},
+	}
+}
+
 func newDeleteBusinessCmd(store *adminStore) *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete-business <business-id>",
@@ -463,6 +580,77 @@ func newSetStockPriceCmd(store *adminStore) *cobra.Command {
 				return err
 			}
 			fmt.Printf("Stock %s -> %s stonky\n", row.Symbol, formatMicros(row.CurrentPriceMicros))
+			return nil
+		},
+	}
+}
+
+func newWorldCmd(store *adminStore) *cobra.Command {
+	return &cobra.Command{
+		Use:   "world",
+		Short: "Show editable world-state values",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			row, err := store.WorldState(ctx)
+			if err != nil {
+				return err
+			}
+			printWorld(row)
+			return nil
+		},
+	}
+}
+
+func newSetWorldCmd(store *adminStore) *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-world <regime> <politics> <policy-focus> <catalyst-name> <ticks> <americas-bps> <europe-bps> <asia-bps> <risk-bias-bps> <headline> <summary>",
+		Short: "Set the current world-state values",
+		Args:  cobra.ExactArgs(11),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			parse32 := func(raw string) (int32, error) {
+				v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 32)
+				return int32(v), err
+			}
+			ticks, err := parse32(args[4])
+			if err != nil {
+				return fmt.Errorf("invalid catalyst ticks")
+			}
+			americas, err := parse32(args[5])
+			if err != nil {
+				return fmt.Errorf("invalid americas bps")
+			}
+			europe, err := parse32(args[6])
+			if err != nil {
+				return fmt.Errorf("invalid europe bps")
+			}
+			asia, err := parse32(args[7])
+			if err != nil {
+				return fmt.Errorf("invalid asia bps")
+			}
+			riskBias, err := parse32(args[8])
+			if err != nil {
+				return fmt.Errorf("invalid risk bias bps")
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			row, err := store.SetWorldState(ctx, worldRow{
+				Regime:                 strings.TrimSpace(args[0]),
+				PoliticalClimate:       strings.TrimSpace(args[1]),
+				PolicyFocus:            strings.TrimSpace(args[2]),
+				CatalystName:           strings.TrimSpace(args[3]),
+				CatalystTicksRemaining: ticks,
+				AmericasBps:            americas,
+				EuropeBps:              europe,
+				AsiaBps:                asia,
+				RiskRewardBiasBps:      riskBias,
+				Headline:               strings.TrimSpace(args[9]),
+				CatalystSummary:        strings.TrimSpace(args[10]),
+			})
+			if err != nil {
+				return err
+			}
+			printWorld(row)
 			return nil
 		},
 	}

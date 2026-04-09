@@ -10,7 +10,7 @@ Stanks is a true CLI stock sandbox game written in Go.
 
 ## What this repository includes
 
-- `stk` CLI with auth, dashboard, trading, business, stocks, social, and sync commands.
+- `stk` CLI with auth, dashboard, world-state, trading, business, stocks, social, and sync commands.
 - `stanks-discord-bot` slash-command Discord bot with embeds and modal-based auth.
 - `stanks-api` HTTP backend for game logic.
 - `stanks-worker` scheduled market + economy engine.
@@ -23,39 +23,50 @@ Stanks is a true CLI stock sandbox game written in Go.
 1. `stk signup`
 2. `stk login`
 3. You start with `25,000 stonky` plus a `2,000 stonky` signup bonus.
-4. Browse market and trade:
+4. Read the world before you trade:
+   - `stk world`
+   - Track the active catalyst, political climate, region drift, and current risk/reward bias.
+5. Browse market and trade:
    - `stk stocks list all`
    - `stk stocks list COBOLT`
    - `stk stocks buy COBOLT` (then enter shares in prompt)
    - `stk stocks sell COBOLT` (then enter shares in prompt)
-5. Build businesses:
+6. Build businesses:
    - `stk business create "Acme Labs"` (then choose visibility in prompt)
    - `stk business visibility <id> public`
    - `stk business ipo <id>` (then enter symbol and price in prompts)
-6. Hire and train professionals for business revenue:
+7. Hire and train professionals for business revenue:
    - `stk business employees candidates`
    - `stk business employees hire <business_id> <candidate_id>`
    - `stk business employees hire-many <business_id> <count> <best_value|high_output|low_risk>`
    - `stk business employees train <business_id> <employee_id>`
-7. Scale with machines and financing:
+8. Scale with machines and financing:
    - `stk business machinery buy <business_id> assembly_line`
    - `stk business loans list <business_id>`
    - `stk business loans take <business_id> 50000`
    - `stk business loans repay <business_id> 10000`
-8. Diversify with mutual funds:
+9. Build progression:
+   - Stack profitable ticks to earn automatic streak rewards.
+   - Grow reputation so your empire looks stronger to the market.
+   - Lean into risk when the world is hot, and pull back when politics/global markets turn.
+10. Own private companies through stakes:
+   - `stk stakes`
+   - `stk stakes give <business_id> <username> <percent>`
+   - Business revenue and bank-sale payouts now flow to every stake holder by ownership percentage.
+11. Diversify with mutual funds:
    - `stk funds list`
    - `stk funds buy CORE20 10`
    - `stk funds sell TECH6X 2`
-9. Exit a company via bank buyout:
+12. Exit a company via bank buyout:
    - `stk business sell <business_id>`
-10. Create and list your own stock:
+13. Create and list your own stock:
    - `stk stocks create ACMELB` (then enter display name and business id in prompts)
    - `stk stocks ipo ACMELB` (then enter price in prompt)
-11. Follow players and compare rankings:
+14. Follow players and compare rankings:
    - `stk friends add <invite_code>`
    - `stk leaderboard global`
    - `stk leaderboard friends`
-12. Replay offline writes:
+15. Replay offline writes:
    - `stk sync`
 
 ## Game rules and constraints
@@ -88,6 +99,11 @@ Then:
 
 Economy tick also applies:
 
+- World-state rotation with:
+  - Political climates (`steady_hand`, `stimulus_wave`, `tariff_cycle`, `antitrust_wave`, `election_heat`)
+  - Mid-term catalysts with a visible tick countdown
+  - Global regional drift across Americas / Europe / Asia
+  - A risk/reward bias that makes aggressive play pay more or hurt more depending on the moment
 - Business revenue credits/debits to owner wallets, now including:
   - Employee salary costs
   - Professional risk drag
@@ -127,6 +143,9 @@ Economy tick also applies:
 - `migrations/0005_active_business.sql`: active business pointer on wallets.
 - `migrations/0006_widen_market_price_columns.sql`: repair legacy `INTEGER` market-price columns to `BIGINT`.
 - `migrations/0007_business_seats.sql`: per-business seat capacity for employee scaling.
+- `migrations/0011_world_progression.sql`: world-state, streak rewards, reputation, and business narrative systems.
+- `migrations/0012_business_stakes.sql`: transferable business ownership and passive stake payouts.
+- `migrations/0013_hire_many_perf.sql`: indexes for faster bulk-hiring queries.
 
 ## Local setup
 
@@ -177,6 +196,9 @@ psql "$DATABASE_URL" -f migrations/0007_business_seats.sql
 psql "$DATABASE_URL" -f migrations/0008_business_employee_count.sql
 psql "$DATABASE_URL" -f migrations/0009_discord_sessions.sql
 psql "$DATABASE_URL" -f migrations/0010_auth_users_local_columns.sql
+psql "$DATABASE_URL" -f migrations/0011_world_progression.sql
+psql "$DATABASE_URL" -f migrations/0012_business_stakes.sql
+psql "$DATABASE_URL" -f migrations/0013_hire_many_perf.sql
 ```
 
 ### Run services
@@ -216,6 +238,8 @@ Notes:
 ### Dashboard/sync
 
 - `stk dash`
+- `stk world`
+- `stk stakes`
 - `stk sync`
 
 ### Stocks
@@ -259,6 +283,11 @@ Alias:
 - `stk business reserve deposit [business_id] [stonky]`
 - `stk business reserve withdraw [business_id] [stonky]`
 
+### Stakes
+
+- `stk stakes`
+- `stk stakes give [business_id] [username] [percent]`
+
 ### Business depth mechanics
 
 - Strategy modes with different risk/reward profiles.
@@ -268,6 +297,8 @@ Alias:
 - Reserve yield per tick (higher with R&D levels).
 - Reserve auto-shield when business cycle turns negative.
 - Brand score and operational-health score affect revenue multipliers.
+- Region exposure and company narrative arcs drive core business volatility.
+- Narrative focus (`product`, `brand`, `supply`, `talent`, `regulatory`, `finance`) changes how politics and catalysts hit each business.
 - Public visibility bonus and listed-company prestige bonus.
 - Employee diminishing returns at high headcount.
 - Upgrade burn-rate operating costs each tick.
@@ -281,6 +312,32 @@ Alias:
 - Loan payment auto-debit each tick.
 - Missed-loan late fees and delinquency tracking.
 - Delinquency escalation: repossession/productivity haircut/forced liquidation.
+
+### World + progression mechanics
+
+- `stk world` shows:
+  - Current market regime
+  - Political climate and policy focus
+  - Mid-term catalyst with remaining ticks
+  - Global market drift for Americas / Europe / Asia
+  - Current risk/reward bias
+- `stk dash` now also shows:
+  - Reputation title + score
+  - Current and best profitable-tick streak
+  - Risk appetite score
+  - Last risk payout and streak reward
+- Streak rewards trigger automatically at profitable streak thresholds.
+- Reputation rises on clean profitable runs and falls faster during bad, high-risk stretches.
+- Risk appetite is derived from concentration, leverage, listed exposure, and aggressive business posture.
+- `stk stakes` shows:
+  - Your percentage in each business
+  - Revenue share per tick
+  - Estimated stake value
+  - Cost basis and unrealized P/L
+- Stake transfers are controller-driven:
+  - Only the controlling owner can give company percentage away
+  - The controller must keep some stake
+  - Passive holders receive business-cycle payouts and sale proceeds automatically
 
 Alias:
 
@@ -325,3 +382,4 @@ Current test coverage includes:
 - Auth records are stored in `auth.users` with bcrypt password hashes and bearer tokens.
 - Production ops details are in `deploy.md`.
 - Business candidate pool now seeds up to 60,000 professionals per season and can grow every tick.
+- Discord `/setup` now points players toward `/world`, `/dashboard`, and the new progression loop.

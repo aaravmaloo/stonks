@@ -257,6 +257,23 @@ type TransferBusinessStakeInput struct {
 	IdempotencyKey    string
 }
 
+type RevokeBusinessStakeInput struct {
+	UserID         string
+	SeasonID       int64
+	BusinessID     int64
+	TargetUsername string
+	StakeBps       int32
+	IdempotencyKey string
+}
+
+type WalletTransferInput struct {
+	UserID            string
+	SeasonID          int64
+	RecipientUsername string
+	AmountMicros      int64
+	IdempotencyKey    string
+}
+
 type LeaderboardRow struct {
 	Rank           int64  `json:"rank"`
 	Username       string `json:"username"`

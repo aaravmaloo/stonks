@@ -34,12 +34,12 @@ type UserContext struct {
 }
 
 type Server struct {
-	cfg  config.APIConfig
-	log  *slog.Logger
-	auth *auth.Client
-	game *game.Service
+	cfg   config.APIConfig
+	log   *slog.Logger
+	auth  *auth.Client
+	game  *game.Service
 	admin *admin.Service
-	mux  *chi.Mux
+	mux   *chi.Mux
 }
 
 func New(cfg config.APIConfig, logger *slog.Logger, authClient *auth.Client, gameSvc *game.Service, adminSvc *admin.Service) *Server {
@@ -47,12 +47,12 @@ func New(cfg config.APIConfig, logger *slog.Logger, authClient *auth.Client, gam
 		logger = slog.Default()
 	}
 	s := &Server{
-		cfg:  cfg,
-		log:  logger,
-		auth: authClient,
-		game: gameSvc,
+		cfg:   cfg,
+		log:   logger,
+		auth:  authClient,
+		game:  gameSvc,
 		admin: adminSvc,
-		mux:  chi.NewRouter(),
+		mux:   chi.NewRouter(),
 	}
 	s.routes()
 	return s
@@ -81,6 +81,8 @@ func (s *Server) routes() {
 			r.Use(s.authMiddleware)
 			r.Get("/dashboard", s.handleDashboard)
 			r.Get("/wallet", s.handleWallet)
+			r.Get("/world", s.handleWorld)
+			r.Get("/stakes", s.handleStakes)
 			r.Get("/stocks", s.handleStocksList)
 			r.Get("/stocks/{symbol}", s.handleStockDetail)
 			r.Post("/orders", s.handleOrder)
@@ -105,6 +107,7 @@ func (s *Server) routes() {
 			r.Post("/businesses/{id}/visibility", s.handleBusinessVisibility)
 			r.Post("/businesses/{id}/ipo", s.handleBusinessIPO)
 			r.Post("/businesses/{id}/sell", s.handleSellBusiness)
+			r.Post("/businesses/{id}/stakes/give", s.handleTransferBusinessStake)
 
 			r.Post("/stocks/custom", s.handleCreateCustomStock)
 			r.Post("/stocks/{symbol}/ipo", s.handleIPOStock)
@@ -128,6 +131,7 @@ func (s *Server) routes() {
 			r.Post("/admin/players/{userID}/balance/set", s.handleAdminSetBalance)
 			r.Post("/admin/players/{userID}/peak/change", s.handleAdminChangePeak)
 			r.Post("/admin/players/{userID}/peak/set", s.handleAdminSetPeak)
+			r.Post("/admin/players/{userID}/progress", s.handleAdminSetPlayerProgress)
 			r.Post("/admin/players/{userID}/active-business", s.handleAdminSetActiveBusiness)
 			r.Get("/admin/players/{userID}/businesses", s.handleAdminBusinesses)
 			r.Get("/admin/players/{userID}/positions", s.handleAdminPositions)
@@ -137,9 +141,14 @@ func (s *Server) routes() {
 			r.Post("/admin/businesses/{id}/visibility", s.handleAdminSetBusinessVisibility)
 			r.Post("/admin/businesses/{id}/listed", s.handleAdminSetBusinessListed)
 			r.Post("/admin/businesses/{id}/revenue", s.handleAdminSetBusinessRevenue)
+			r.Post("/admin/businesses/{id}/narrative", s.handleAdminSetBusinessNarrative)
+			r.Get("/admin/businesses/{id}/stakes", s.handleAdminBusinessStakes)
+			r.Post("/admin/businesses/{id}/stakes", s.handleAdminSetBusinessStake)
 			r.Delete("/admin/businesses/{id}", s.handleAdminDeleteBusiness)
 			r.Get("/admin/stocks", s.handleAdminStocks)
 			r.Post("/admin/stocks/{symbol}/price", s.handleAdminSetStockPrice)
+			r.Get("/admin/world", s.handleAdminWorld)
+			r.Post("/admin/world", s.handleAdminSetWorld)
 		})
 	})
 }
@@ -278,6 +287,39 @@ func (s *Server) handleWallet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleWorld(w http.ResponseWriter, r *http.Request) {
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out, err := s.game.WorldState(r.Context(), seasonID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleStakes(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out, err := s.game.ListStakes(r.Context(), user.UserID, seasonID)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stakes": out})
 }
 
 func (s *Server) handleStocksList(w http.ResponseWriter, r *http.Request) {
@@ -979,6 +1021,45 @@ func (s *Server) handleSellBusiness(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (s *Server) handleTransferBusinessStake(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	businessID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid business id")
+		return
+	}
+	var in struct {
+		Username string `json:"username"`
+		StakeBps int32  `json:"stake_bps"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.game.TransferBusinessStake(r.Context(), game.TransferBusinessStakeInput{
+		UserID:            user.UserID,
+		SeasonID:          seasonID,
+		BusinessID:        businessID,
+		RecipientUsername: in.Username,
+		StakeBps:          in.StakeBps,
+		IdempotencyKey:    idempotencyKey(r),
+	})
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleCreateCustomStock(w http.ResponseWriter, r *http.Request) {
 	user, err := userFromContext(r.Context())
 	if err != nil {
@@ -1195,7 +1276,7 @@ func writeDomainError(w http.ResponseWriter, err error) {
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.As(err, &pgErr) && pgErr.Code == "42P01":
-		writeError(w, http.StatusInternalServerError, "database schema is outdated: run migrations 0002_business_expansion.sql through 0006_widen_market_price_columns.sql")
+		writeError(w, http.StatusInternalServerError, "database schema is outdated: run migrations through 0011_world_progression.sql")
 	case errors.Is(err, game.ErrDuplicateIdempotency):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, game.ErrInsufficientFunds), errors.Is(err, game.ErrInsufficientShares):

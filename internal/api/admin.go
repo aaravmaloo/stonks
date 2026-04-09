@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"stanks/internal/admin"
+
 	"github.com/go-chi/chi/v5"
 )
 
@@ -83,6 +85,25 @@ func (s *Server) handleAdminSetPeak(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row, err := s.admin.SetPeak(r.Context(), chi.URLParam(r, "userID"), in.AmountMicros)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
+}
+
+func (s *Server) handleAdminSetPlayerProgress(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ReputationScore     int32 `json:"reputation_score"`
+		CurrentProfitStreak int32 `json:"current_profit_streak"`
+		BestProfitStreak    int32 `json:"best_profit_streak"`
+		RiskAppetiteBps     int32 `json:"risk_appetite_bps"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	row, err := s.admin.SetPlayerProgress(r.Context(), chi.URLParam(r, "userID"), in.ReputationScore, in.CurrentProfitStreak, in.BestProfitStreak, in.RiskAppetiteBps)
 	if err != nil {
 		writeDomainError(w, err)
 		return
@@ -241,6 +262,63 @@ func (s *Server) handleAdminDeleteBusiness(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+func (s *Server) handleAdminSetBusinessNarrative(w http.ResponseWriter, r *http.Request) {
+	businessID, ok := parseBusinessID(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		PrimaryRegion        string `json:"primary_region"`
+		NarrativeArc         string `json:"narrative_arc"`
+		NarrativeFocus       string `json:"narrative_focus"`
+		NarrativePressureBps int32  `json:"narrative_pressure_bps"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	row, err := s.admin.SetBusinessNarrative(r.Context(), businessID, in.PrimaryRegion, in.NarrativeArc, in.NarrativeFocus, in.NarrativePressureBps)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
+}
+
+func (s *Server) handleAdminBusinessStakes(w http.ResponseWriter, r *http.Request) {
+	businessID, ok := parseBusinessID(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.admin.ListBusinessStakes(r.Context(), businessID)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stakes": rows})
+}
+
+func (s *Server) handleAdminSetBusinessStake(w http.ResponseWriter, r *http.Request) {
+	businessID, ok := parseBusinessID(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Username string `json:"username"`
+		StakeBps int32  `json:"stake_bps"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rows, err := s.admin.SetBusinessStake(r.Context(), businessID, in.Username, in.StakeBps)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stakes": rows})
+}
+
 func (s *Server) handleAdminStocks(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.admin.ListStocks(r.Context())
 	if err != nil {
@@ -259,6 +337,29 @@ func (s *Server) handleAdminSetStockPrice(w http.ResponseWriter, r *http.Request
 		return
 	}
 	row, err := s.admin.SetStockPrice(r.Context(), strings.ToUpper(chi.URLParam(r, "symbol")), in.PriceMicros)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
+}
+
+func (s *Server) handleAdminWorld(w http.ResponseWriter, r *http.Request) {
+	row, err := s.admin.WorldState(r.Context())
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
+}
+
+func (s *Server) handleAdminSetWorld(w http.ResponseWriter, r *http.Request) {
+	var in admin.WorldState
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	row, err := s.admin.SetWorldState(r.Context(), in)
 	if err != nil {
 		writeDomainError(w, err)
 		return

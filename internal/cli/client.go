@@ -73,6 +73,18 @@ func (c *Client) WalletSummary(ctx context.Context, accessToken string) (map[str
 	return out, err
 }
 
+func (c *Client) World(ctx context.Context, accessToken string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodGet, "/v1/world", accessToken, nil, &out, "")
+	return out, err
+}
+
+func (c *Client) ListStakes(ctx context.Context, accessToken string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodGet, "/v1/stakes", accessToken, nil, &out, "")
+	return out, err
+}
+
 func (c *Client) ListStocks(ctx context.Context, accessToken string, all bool) (map[string]any, error) {
 	path := "/v1/stocks"
 	if all {
@@ -237,6 +249,15 @@ func (c *Client) BusinessReserveWithdraw(ctx context.Context, accessToken string
 func (c *Client) SellBusinessToBank(ctx context.Context, accessToken string, businessID int64, idem string) (map[string]any, error) {
 	var out map[string]any
 	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/sell", businessID), accessToken, map[string]any{}, &out, idem)
+	return out, err
+}
+
+func (c *Client) TransferBusinessStake(ctx context.Context, accessToken string, businessID int64, username string, stakeBps int32, idem string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, fmt.Sprintf("/v1/businesses/%d/stakes/give", businessID), accessToken, map[string]any{
+		"username":  username,
+		"stake_bps": stakeBps,
+	}, &out, idem)
 	return out, err
 }
 

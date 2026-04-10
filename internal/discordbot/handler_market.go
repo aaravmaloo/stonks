@@ -77,13 +77,14 @@ func (b *Bot) handleDashboard(ctx context.Context, s *discordgo.Session, i *disc
 		sections = append(sections, "**Businesses**\nNo businesses yet.")
 	} else {
 		lines := []string{
-			fmt.Sprintf("%-4s %-18s %-10s %-10s %-10s", "ID", "NAME", "ARC", "REV/TICK", "RESERVE"),
+			fmt.Sprintf("%-4s %-16s %-9s %-8s %-10s %-10s", "ID", "NAME", "ARC", "CYCLE", "REV/TICK", "RESERVE"),
 		}
 		for _, biz := range out.Businesses {
-			lines = append(lines, fmt.Sprintf("%-4d %-18s %-10s %-10s %-10s",
+			lines = append(lines, fmt.Sprintf("%-4d %-16s %-9s %-8s %-10s %-10s",
 				biz.ID,
-				truncateText(biz.Name, 18),
-				truncateText(biz.NarrativeArc, 10),
+				truncateText(biz.Name, 16),
+				truncateText(biz.NarrativeArc, 9),
+				truncateText(biz.CyclePhase, 8),
 				fmtMicrosExact(biz.RevenuePerTickMicros),
 				fmtMicrosExact(biz.CashReserveMicros),
 			))
@@ -175,6 +176,83 @@ func (b *Bot) handleWallet(ctx context.Context, s *discordgo.Session, i *discord
 	}
 	eb := NewEmbed().Title("Wallet").Color(colorInfo).Desc(codeBlock(lines...))
 	return b.respondEmbed(s, i, eb.Build())
+}
+
+func (b *Bot) handleRush(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {
+	token, _, err := b.requireSession(ctx, s, i)
+	if err != nil {
+		return err
+	}
+	data := i.ApplicationCommandData()
+	amount := numberOption(data.Options, "amount", 0)
+	mode := strings.TrimSpace(stringOption(data.Options, "mode", ""))
+	if amount <= 0 {
+		raw, err := b.client.RushStatus(ctx, token)
+		if err != nil {
+			return b.respondAuthAwareError(ctx, s, i, err)
+		}
+		out, err := decodeInto[game.RushStatus](raw)
+		if err != nil {
+			return err
+		}
+		lines := []string{
+			fmt.Sprintf("Streak:        %d (best %d)", out.CurrentStreak, out.BestStreak),
+			fmt.Sprintf("Rounds / Wins: %d / %d", out.RoundCount, out.WinCount),
+			fmt.Sprintf("Win Rate:      %.2f%%", float64(out.WinRateBps)/100),
+			fmt.Sprintf("Vault Level:   %d", out.VaultLevel),
+			fmt.Sprintf("Vault Points:  %d (%d to next)", out.VaultPoints, out.PointsToNextVault),
+			fmt.Sprintf("Last Mode:     %s", out.LastMode),
+			fmt.Sprintf("Last Mult:     %.2fx", float64(out.LastMultiplierBps)/10000),
+			fmt.Sprintf("Last Result:   %s stonky", signedMicrosExact(out.LastPayoutMicros)),
+			fmt.Sprintf("Vault Reward:  %s stonky", signedMicrosExact(out.LastVaultRewardMicros)),
+			fmt.Sprintf("World Heat:    %.2f%%", float64(out.WorldMomentumBps)/100),
+		}
+		eb := NewEmbed().Title("Rush").Color(colorMarket).Desc(codeBlock(lines...))
+		return b.respondEmbed(s, i, eb.Build())
+	}
+
+	raw, err := b.client.PlayRush(ctx, token, mode, uuid.NewString(), game.StonkyToMicros(amount))
+	if err != nil {
+		return b.respondAuthAwareError(ctx, s, i, err)
+	}
+	statusRaw, ok := raw["status"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("missing rush status")
+	}
+	status, err := decodeInto[game.RushStatus](statusRaw)
+	if err != nil {
+		return err
+	}
+	won, _ := raw["won"].(bool)
+	fields := []*discordgo.MessageEmbedField{
+		{Name: "Outcome", Value: ternary(won, "win", "loss"), Inline: true},
+		{Name: "Mode", Value: fmt.Sprint(raw["mode"]), Inline: true},
+		{Name: "Streak", Value: fmt.Sprintf("%d (best %d)", status.CurrentStreak, status.BestStreak), Inline: true},
+		{Name: "Net Delta", Value: fmtStonky(valueAsInt64(raw["net_delta_micros"])), Inline: true},
+		{Name: "Vault", Value: fmt.Sprintf("%d pts, %d to next", status.VaultPoints, status.PointsToNextVault), Inline: true},
+		{Name: "Balance", Value: fmtStonky(valueAsInt64(raw["balance_micros"])), Inline: true},
+	}
+	if reward := valueAsInt64(raw["vault_reward_micros"]); reward != 0 {
+		fields = append(fields, &discordgo.MessageEmbedField{Name: "Vault Reward", Value: fmtStonky(reward), Inline: true})
+	}
+	if bonus := valueAsInt64(raw["milestone_reward_micros"]); bonus != 0 {
+		fields = append(fields, &discordgo.MessageEmbedField{Name: "Milestone Bonus", Value: fmtStonky(bonus), Inline: true})
+	}
+	title := ternary(won, "Rush Hit", "Rush Missed")
+	color := colorError
+	if won {
+		color = colorSuccess
+	}
+	eb := NewEmbed().Title(title).Color(color).Desc(fmt.Sprintf("Mode `%s` for %s resolved.", fmt.Sprint(raw["mode"]), fmtStonky(game.StonkyToMicros(amount))))
+	for _, field := range fields {
+		eb.Field(field.Name, field.Value, field.Inline)
+	}
+	return b.respondEmbed(s, i, eb.Build())
+}
+
+func valueAsInt64(v any) int64 {
+	out, _ := toInt64(v)
+	return out
 }
 
 func (b *Bot) handleTransfer(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) error {

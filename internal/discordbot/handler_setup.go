@@ -70,6 +70,7 @@ func (b *Bot) setupStartEmbed(ctx context.Context, i *discordgo.InteractionCreat
 		"`/login` -> reconnect an existing account",
 		"`/world` -> read the catalyst, political pressure, and global market drift",
 		"`/dashboard` -> see wallet, positions, businesses, reputation, and streaks",
+		"`/rush` -> play the streak-and-vault risk loop",
 		"`/transfer` -> send stonky to another player",
 		"`/stakes` -> track your business ownership and passive P/L",
 	}, "\n")
@@ -87,6 +88,7 @@ func (b *Bot) setupCommandsEmbed() *discordgo.MessageEmbed {
 		"`/stock symbol:COBOLT` inspect one ticker",
 		"`/order symbol:COBOLT side:buy shares:5` place a trade",
 		"`/world` read the political layer and mid-term catalyst",
+		"`/rush mode:surge amount:250` chase streaks and vault drops",
 		"`/business-create name:\"Acme Labs\" visibility:public` open a company",
 		"`/candidates`, `/employees`, `/hire-many` grow staff",
 		"`/transfer username:friend amount:500` send stonky",

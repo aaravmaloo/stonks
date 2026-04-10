@@ -163,6 +163,8 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleWorld(ctx, s, i) })
 	case "wallet":
 		err = b.runDeferred(ctx, s, i, func() error { return b.handleWallet(ctx, s, i) })
+	case "rush":
+		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleRush(ctx, s, i) })
 	case "transfer":
 		err = b.runDeferredPrivate(ctx, s, i, func() error { return b.handleTransfer(ctx, s, i) })
 	case "portfolio":

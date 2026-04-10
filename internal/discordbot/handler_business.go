@@ -59,6 +59,7 @@ func (b *Bot) handleBusiness(ctx context.Context, s *discordgo.Session, i *disco
 		fmt.Sprintf("Story Arc:   %s", out.NarrativeArc),
 		fmt.Sprintf("Story Focus: %s", out.NarrativeFocus),
 		fmt.Sprintf("Pressure:    %.2f%%", float64(out.NarrativePressureBps)/100),
+		fmt.Sprintf("Cycle:       %s (%d ticks, %.2f%%)", out.CyclePhase, out.CycleTicksRemaining, float64(out.CycleImpactBps)/100),
 		fmt.Sprintf("Strategy:    %s", out.Strategy),
 		fmt.Sprintf("Employees:   %d / %d", out.EmployeeCount, out.EmployeeLimit),
 		fmt.Sprintf("Machinery:   %d", out.MachineryCount),

@@ -45,6 +45,11 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 		{Name: "AIEDGE", Value: "AIEDGE"},
 		{Name: "STABLE", Value: "STABLE"},
 	}
+	rushChoices := []*discordgo.ApplicationCommandOptionChoice{
+		{Name: "steady", Value: "steady"},
+		{Name: "surge", Value: "surge"},
+		{Name: "apex", Value: "apex"},
+	}
 
 	commands := []*discordgo.ApplicationCommand{
 		{Name: "setup", Description: "Show the Stanks intro and how to start playing"},
@@ -54,6 +59,14 @@ func commandDefinitions() []*discordgo.ApplicationCommand {
 		{Name: "dashboard", Description: "Show your full Stanks dashboard"},
 		{Name: "world", Description: "Show the current political climate, catalyst, and global markets"},
 		{Name: "wallet", Description: "Show your wallet balance and stats"},
+		{
+			Name:        "rush",
+			Description: "Play the streak-and-vault volatility loop",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionString, Name: "mode", Description: "steady, surge, or apex", Choices: rushChoices},
+				{Type: discordgo.ApplicationCommandOptionNumber, Name: "amount", Description: "Amount in stonky to put on the line"},
+			},
+		},
 		{
 			Name:        "transfer",
 			Description: "Send stonky to another player by username",

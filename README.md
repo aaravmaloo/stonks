@@ -49,24 +49,30 @@ Stanks is a true CLI stock sandbox game written in Go.
    - Stack profitable ticks to earn automatic streak rewards.
    - Grow reputation so your empire looks stronger to the market.
    - Lean into risk when the world is hot, and pull back when politics/global markets turn.
-10. Own private companies through stakes:
+10. Chase the `rush` loop:
+   - `stk rush`
+   - `stk rush play 250 steady`
+   - `stk rush play 500 surge`
+   - `stk rush play 1000 apex`
+   - `rush` is the streak-and-vault risk loop: wins build streaks, vault points, milestone bonuses, and periodic vault drops.
+11. Own private companies through stakes:
    - `stk stakes`
    - `stk stakes give <business_id> <username> <percent>`
    - Business revenue and bank-sale payouts now flow to every stake holder by ownership percentage.
-11. Diversify with mutual funds:
+12. Diversify with mutual funds:
    - `stk funds list`
    - `stk funds buy CORE20 10`
    - `stk funds sell TECH6X 2`
-12. Exit a company via bank buyout:
+13. Exit a company via bank buyout:
    - `stk business sell <business_id>`
-13. Create and list your own stock:
+14. Create and list your own stock:
    - `stk stocks create ACMELB` (then enter display name and business id in prompts)
    - `stk stocks ipo ACMELB` (then enter price in prompt)
-14. Follow players and compare rankings:
+15. Follow players and compare rankings:
    - `stk friends add <invite_code>`
    - `stk leaderboard global`
    - `stk leaderboard friends`
-15. Replay offline writes:
+16. Replay offline writes:
    - `stk sync`
 
 ## Game rules and constraints
@@ -105,6 +111,7 @@ Economy tick also applies:
   - Global regional drift across Americas / Europe / Asia
   - A risk/reward bias that makes aggressive play pay more or hurt more depending on the moment
 - Business revenue credits/debits to owner wallets, now including:
+  - Persistent business profit/loss periods (`stable`, `boom`, `slump`, `recovery`, `squeeze`) that change company economics for several ticks at a time
   - Employee salary costs
   - Professional risk drag
   - Machinery output + machinery upkeep
@@ -146,6 +153,7 @@ Economy tick also applies:
 - `migrations/0011_world_progression.sql`: world-state, streak rewards, reputation, and business narrative systems.
 - `migrations/0012_business_stakes.sql`: transferable business ownership and passive stake payouts.
 - `migrations/0013_hire_many_perf.sql`: indexes for faster bulk-hiring queries.
+- `migrations/0014_rush_and_business_cycles.sql`: rush progression plus persistent business cycle phases.
 
 ## Local setup
 
@@ -199,6 +207,7 @@ psql "$DATABASE_URL" -f migrations/0010_auth_users_local_columns.sql
 psql "$DATABASE_URL" -f migrations/0011_world_progression.sql
 psql "$DATABASE_URL" -f migrations/0012_business_stakes.sql
 psql "$DATABASE_URL" -f migrations/0013_hire_many_perf.sql
+psql "$DATABASE_URL" -f migrations/0014_rush_and_business_cycles.sql
 ```
 
 ### Run services

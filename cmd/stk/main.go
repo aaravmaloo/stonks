@@ -53,6 +53,7 @@ func main() {
 		newLogoutCmd(),
 		newDashCmd(&apiBase),
 		newWorldCmd(&apiBase),
+		newRushCmd(&apiBase),
 		newStakesCmd(&apiBase),
 		newSyncCmd(&apiBase),
 		newStocksCmd(&apiBase),
@@ -252,6 +253,68 @@ func newWorldCmd(apiBase *string) *cobra.Command {
 			return renderWorld(out)
 		},
 	}
+}
+
+func newRushCmd(apiBase *string) *cobra.Command {
+	rush := &cobra.Command{
+		Use:   "rush",
+		Short: "Play the high-volatility streak loop",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			client := newClient(apiBase)
+			out, err := client.RushStatus(ctx, sess.AccessToken)
+			if err != nil {
+				return err
+			}
+			return renderRushStatus(out)
+		},
+	}
+	rush.AddCommand(&cobra.Command{
+		Use:   "play [amount] [steady|surge|apex]",
+		Short: "Put stonky on the line for streaks and vault drops",
+		Args:  cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := cl.LoadSession()
+			if err != nil {
+				return fmt.Errorf("login required: %w", err)
+			}
+			amount := 0.0
+			if len(args) >= 1 {
+				amount, err = strconv.ParseFloat(strings.TrimSpace(args[0]), 64)
+				if err != nil {
+					return fmt.Errorf("amount must be a valid number")
+				}
+			} else {
+				amount, err = promptFloat("Rush amount", 0)
+				if err != nil {
+					return err
+				}
+			}
+			mode := "steady"
+			if len(args) >= 2 {
+				mode = strings.ToLower(strings.TrimSpace(args[1]))
+			} else {
+				mode, err = promptChoice("Rush mode", []string{"steady", "surge", "apex"}, "steady")
+				if err != nil {
+					return err
+				}
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			client := newClient(apiBase)
+			out, err := client.PlayRush(ctx, sess.AccessToken, mode, uuid.NewString(), game.StonkyToMicros(amount))
+			if err != nil {
+				return err
+			}
+			return renderRushPlay(out)
+		},
+	})
+	return rush
 }
 
 func newStakesCmd(apiBase *string) *cobra.Command {

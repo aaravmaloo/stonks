@@ -82,6 +82,8 @@ func (s *Server) routes() {
 			r.Get("/dashboard", s.handleDashboard)
 			r.Get("/wallet", s.handleWallet)
 			r.Get("/world", s.handleWorld)
+			r.Get("/rush", s.handleRushStatus)
+			r.Post("/rush/play", s.handleRushPlay)
 			r.Get("/stakes", s.handleStakes)
 			r.Post("/transfer", s.handleTransferStonky)
 			r.Get("/stocks", s.handleStocksList)
@@ -300,6 +302,58 @@ func (s *Server) handleWorld(w http.ResponseWriter, r *http.Request) {
 	out, err := s.game.WorldState(r.Context(), seasonID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleRushStatus(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out, err := s.game.RushStatus(r.Context(), user.UserID, seasonID)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleRushPlay(w http.ResponseWriter, r *http.Request) {
+	user, err := userFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	seasonID, err := s.game.ActiveSeasonID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var in struct {
+		Mode         string `json:"mode"`
+		AmountMicros int64  `json:"amount_micros"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.game.PlayRush(r.Context(), game.RushPlayInput{
+		UserID:         user.UserID,
+		SeasonID:       seasonID,
+		Mode:           in.Mode,
+		AmountMicros:   in.AmountMicros,
+		IdempotencyKey: idempotencyKey(r),
+	})
+	if err != nil {
+		writeDomainError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)

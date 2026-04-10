@@ -52,6 +52,7 @@ type leaderboardPayload struct {
 }
 
 type worldPayload = game.WorldView
+type rushPayload = game.RushStatus
 
 type stakesPayload struct {
 	Stakes []game.StakeView `json:"stakes"`
@@ -326,18 +327,19 @@ func renderDashboard(raw map[string]any) error {
 	if len(d.Businesses) == 0 {
 		printInfo("No businesses yet.")
 	} else {
-		fmt.Printf("%-6s %-20s %-9s %-8s %-10s %17s %8s %12s %12s %12s %10s\n", "ID", "NAME", "VISIBILITY", "LISTED", "STRATEGY", "EMPLOYEES/CAP", "MACH", "REV/TICK", "UPKEEP", "LOANS", "RESERVE")
+		fmt.Printf("%-6s %-20s %-9s %-8s %-10s %-9s %17s %8s %12s %12s %12s %10s\n", "ID", "NAME", "VISIBILITY", "LISTED", "STRATEGY", "CYCLE", "EMPLOYEES/CAP", "MACH", "REV/TICK", "UPKEEP", "LOANS", "RESERVE")
 		for _, b := range d.Businesses {
 			listed := "no"
 			if b.IsListed {
 				listed = "yes"
 			}
-			fmt.Printf("%-6d %-20s %-9s %-8s %-10s %17s %8d %12s %12s %12s %10s\n",
+			fmt.Printf("%-6d %-20s %-9s %-8s %-10s %-9s %17s %8d %12s %12s %12s %10s\n",
 				b.ID,
 				truncate(b.Name, 20),
 				b.Visibility,
 				listed,
 				truncate(b.Strategy, 10),
+				truncate(b.CyclePhase, 9),
 				fmt.Sprintf("%d/%d", b.EmployeeCount, b.EmployeeLimit),
 				b.MachineryCount,
 				formatMicros(b.RevenuePerTickMicros),
@@ -475,6 +477,7 @@ func renderBusinessState(raw map[string]any) error {
 	fmt.Printf("Story Arc:   %s\n", out.NarrativeArc)
 	fmt.Printf("Story Focus: %s\n", out.NarrativeFocus)
 	fmt.Printf("Pressure:    %.2f%%\n", float64(out.NarrativePressureBps)/100)
+	fmt.Printf("Cycle:       %s (%d ticks, %.2f%%)\n", out.CyclePhase, out.CycleTicksRemaining, float64(out.CycleImpactBps)/100)
 	fmt.Printf("Upgrades:    mkt=%d rd=%d auto=%d comp=%d\n", out.MarketingLevel, out.RDLevel, out.AutomationLevel, out.ComplianceLevel)
 	fmt.Printf("Brand:       %.2f%%\n", float64(out.BrandBps)/100)
 	fmt.Printf("Op Health:   %.2f%%\n", float64(out.OperationalHealthBps)/100)
@@ -672,6 +675,64 @@ func renderWorld(raw map[string]any) error {
 	return nil
 }
 
+func renderRushStatus(raw map[string]any) error {
+	out, err := decodeInto[rushPayload](raw)
+	if err != nil {
+		return err
+	}
+	accent.Println("\n== RUSH ==")
+	fmt.Printf("Streak:             %d (best %d)\n", out.CurrentStreak, out.BestStreak)
+	fmt.Printf("Rounds / Wins:      %d / %d\n", out.RoundCount, out.WinCount)
+	fmt.Printf("Win Rate:           %.2f%%\n", float64(out.WinRateBps)/100)
+	fmt.Printf("Vault Level:        %d\n", out.VaultLevel)
+	fmt.Printf("Vault Points:       %d (%d to next)\n", out.VaultPoints, out.PointsToNextVault)
+	fmt.Printf("Last Mode:          %s\n", out.LastMode)
+	fmt.Printf("Last Multiplier:    %.2fx\n", float64(out.LastMultiplierBps)/10000)
+	fmt.Printf("Last Result:        %s stonky\n", colorizeMicros(out.LastPayoutMicros))
+	fmt.Printf("Last Vault Reward:  %s stonky\n", colorizeMicros(out.LastVaultRewardMicros))
+	fmt.Printf("World Momentum:     %.2f%%\n", float64(out.WorldMomentumBps)/100)
+	fmt.Println()
+	return nil
+}
+
+func renderRushPlay(raw map[string]any) error {
+	statusRaw, ok := raw["status"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("missing rush status in response")
+	}
+	status, err := decodeInto[rushPayload](statusRaw)
+	if err != nil {
+		return err
+	}
+	won := false
+	if v, ok := raw["won"].(bool); ok {
+		won = v
+	}
+	mode := fmt.Sprint(raw["mode"])
+	netDelta := mapInt64(raw, "net_delta_micros")
+	wager := mapInt64(raw, "wager_micros")
+	milestone := mapInt64(raw, "milestone_reward_micros")
+	vault := mapInt64(raw, "vault_reward_micros")
+	multiplier := mapInt64(raw, "multiplier_bps")
+	accent.Println("\n== RUSH RESULT ==")
+	fmt.Printf("Mode:               %s\n", mode)
+	fmt.Printf("Wager:              %s stonky\n", formatMicros(wager))
+	fmt.Printf("Outcome:            %s\n", ternaryString(won, "win", "loss"))
+	fmt.Printf("Multiplier:         %.2fx\n", float64(multiplier)/10000)
+	fmt.Printf("Net Delta:          %s stonky\n", colorizeMicros(netDelta))
+	if milestone != 0 {
+		fmt.Printf("Milestone Bonus:    %s stonky\n", colorizeMicros(milestone))
+	}
+	if vault != 0 {
+		fmt.Printf("Vault Reward:       %s stonky\n", colorizeMicros(vault))
+	}
+	fmt.Printf("New Streak:         %d (best %d)\n", status.CurrentStreak, status.BestStreak)
+	fmt.Printf("Vault Progress:     %d points (%d to next)\n", status.VaultPoints, status.PointsToNextVault)
+	fmt.Printf("Balance:            %s stonky\n", formatMicros(mapInt64(raw, "balance_micros")))
+	fmt.Println()
+	return nil
+}
+
 func renderStakes(raw map[string]any) error {
 	out, err := decodeInto[stakesPayload](raw)
 	if err != nil {
@@ -801,6 +862,26 @@ func truncate(s string, n int) string {
 		return s[:n]
 	}
 	return s[:n-3] + "..."
+}
+
+func mapInt64(m map[string]any, key string) int64 {
+	switch v := m[key].(type) {
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	case int:
+		return int64(v)
+	default:
+		return 0
+	}
+}
+
+func ternaryString(cond bool, yes, no string) string {
+	if cond {
+		return yes
+	}
+	return no
 }
 
 func orderNotional(priceMicros, qtyUnits int64) int64 {

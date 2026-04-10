@@ -79,6 +79,21 @@ func (c *Client) World(ctx context.Context, accessToken string) (map[string]any,
 	return out, err
 }
 
+func (c *Client) RushStatus(ctx context.Context, accessToken string) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodGet, "/v1/rush", accessToken, nil, &out, "")
+	return out, err
+}
+
+func (c *Client) PlayRush(ctx context.Context, accessToken, mode, idem string, amountMicros int64) (map[string]any, error) {
+	var out map[string]any
+	err := c.jsonRequest(ctx, http.MethodPost, "/v1/rush/play", accessToken, map[string]any{
+		"mode":          mode,
+		"amount_micros": amountMicros,
+	}, &out, idem)
+	return out, err
+}
+
 func (c *Client) ListStakes(ctx context.Context, accessToken string) (map[string]any, error) {
 	var out map[string]any
 	err := c.jsonRequest(ctx, http.MethodGet, "/v1/stakes", accessToken, nil, &out, "")

@@ -192,47 +192,50 @@ func (s *Service) ClampNegativeBalances(ctx context.Context, seasonID int64) err
 }
 
 type businessCycle struct {
-	businessID         int64
-	userID             string
-	name               string
-	controllerUsername string
-	visibility         string
-	isListed           bool
-	stockSymbol        string
-	primaryRegion      string
-	narrativeArc       string
-	narrativeFocus     string
-	narrativePressure  int32
-	employeeLimit      int64
-	strategy           string
-	baseRevenue        int64
-	lastEvent          string
-	marketingLevel     int32
-	rdLevel            int32
-	automationLevel    int32
-	complianceLevel    int32
-	brandBps           int32
-	healthBps          int32
-	reserveMicros      int64
-	employeeRevenue    int64
-	employeeCount      int64
-	avgRiskBps         float64
-	opsCount           int64
-	engineerCount      int64
-	productCount       int64
-	salesCount         int64
-	growthCount        int64
-	financeCount       int64
-	legalCount         int64
-	designCount        int64
-	machineryCount     int64
-	machineOutput      int64
-	machineUpkeep      int64
-	loanOutstanding    int64
-	loanInterest       int64
-	stockID            *int64
-	stockPrice         int64
-	stockAnchorPrice   int64
+	businessID          int64
+	userID              string
+	name                string
+	controllerUsername  string
+	visibility          string
+	isListed            bool
+	stockSymbol         string
+	primaryRegion       string
+	narrativeArc        string
+	narrativeFocus      string
+	narrativePressure   int32
+	cyclePhase          string
+	cycleTicksRemaining int32
+	cycleImpactBps      int32
+	employeeLimit       int64
+	strategy            string
+	baseRevenue         int64
+	lastEvent           string
+	marketingLevel      int32
+	rdLevel             int32
+	automationLevel     int32
+	complianceLevel     int32
+	brandBps            int32
+	healthBps           int32
+	reserveMicros       int64
+	employeeRevenue     int64
+	employeeCount       int64
+	avgRiskBps          float64
+	opsCount            int64
+	engineerCount       int64
+	productCount        int64
+	salesCount          int64
+	growthCount         int64
+	financeCount        int64
+	legalCount          int64
+	designCount         int64
+	machineryCount      int64
+	machineOutput       int64
+	machineUpkeep       int64
+	loanOutstanding     int64
+	loanInterest        int64
+	stockID             *int64
+	stockPrice          int64
+	stockAnchorPrice    int64
 }
 
 type businessProjection struct {
@@ -258,6 +261,9 @@ func loadBusinessCyclesTx(ctx context.Context, tx pgx.Tx, seasonID int64, ownerU
 		       b.narrative_arc,
 		       b.narrative_focus,
 		       b.narrative_pressure_bps,
+		       b.cycle_phase,
+		       b.cycle_ticks_remaining,
+		       b.cycle_impact_bps,
 		       b.seat_capacity,
 		       b.strategy,
 		       b.base_revenue_micros,
@@ -351,7 +357,7 @@ func loadBusinessCyclesTx(ctx context.Context, tx pgx.Tx, seasonID int64, ownerU
 		var c businessCycle
 		var stockID sql.NullInt64
 		if err := rows.Scan(
-			&c.businessID, &c.userID, &c.name, &c.controllerUsername, &c.visibility, &c.isListed, &c.stockSymbol, &c.primaryRegion, &c.narrativeArc, &c.narrativeFocus, &c.narrativePressure, &c.employeeLimit, &c.strategy,
+			&c.businessID, &c.userID, &c.name, &c.controllerUsername, &c.visibility, &c.isListed, &c.stockSymbol, &c.primaryRegion, &c.narrativeArc, &c.narrativeFocus, &c.narrativePressure, &c.cyclePhase, &c.cycleTicksRemaining, &c.cycleImpactBps, &c.employeeLimit, &c.strategy,
 			&c.baseRevenue, &c.lastEvent, &c.marketingLevel, &c.rdLevel, &c.automationLevel, &c.complianceLevel,
 			&c.brandBps, &c.healthBps, &c.reserveMicros,
 			&c.employeeRevenue, &c.employeeCount, &c.avgRiskBps,
@@ -407,6 +413,7 @@ func projectBusinessCycle(c businessCycle) businessProjection {
 
 	preMultiplierGross := c.baseRevenue + employeeRevenue + machineOutput
 	gross := int64(math.Round(float64(preMultiplierGross) * marketingBoost * rdBoost * brandBoost * healthBoost * team.RevenueMultiplier))
+	gross = int64(math.Round(float64(gross) * businessCycleRevenueMultiplier(c)))
 	if c.visibility == "public" {
 		gross = int64(math.Round(float64(gross) * 1.04))
 	}
@@ -444,6 +451,9 @@ func projectBusinessCycle(c businessCycle) businessProjection {
 
 	salaryCost := employeeSalaryCostMicros(c.employeeCount, c.avgRiskBps, c.marketingLevel, c.rdLevel, c.automationLevel, c.complianceLevel)
 	maintenanceCost := businessMaintenanceCostMicros(c.employeeCount, c.machineryCount, c.reserveMicros, c.automationLevel, c.complianceLevel)
+	costMultiplier := businessCycleCostMultiplier(c)
+	salaryCost = int64(math.Round(float64(salaryCost) * costMultiplier))
+	maintenanceCost = int64(math.Round(float64(maintenanceCost) * costMultiplier))
 	machineryMaintenance := machineUpkeep
 	upgradeBurn := int64((int64(c.marketingLevel)*5 + int64(c.rdLevel)*5 + int64(c.automationLevel)*4 + int64(c.complianceLevel)*4) * MicrosPerStonky)
 	totalCosts := salaryCost + maintenanceCost + machineryMaintenance + c.loanInterest + upgradeBurn + riskPenalty
@@ -577,6 +587,9 @@ func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) 
 			NarrativeArc:          c.narrativeArc,
 			NarrativeFocus:        c.narrativeFocus,
 			NarrativePressureBps:  c.narrativePressure,
+			CyclePhase:            c.cyclePhase,
+			CycleTicksRemaining:   c.cycleTicksRemaining,
+			CycleImpactBps:        c.cycleImpactBps,
 			EmployeeLimit:         c.employeeLimit,
 			EmployeeCount:         c.employeeCount,
 			RevenuePerTickMicros:  p.RevenuePerTickMicros,
@@ -915,6 +928,9 @@ func (s *Service) BusinessState(ctx context.Context, userID string, seasonID, bu
 		NarrativeArc:          c.narrativeArc,
 		NarrativeFocus:        c.narrativeFocus,
 		NarrativePressureBps:  c.narrativePressure,
+		CyclePhase:            c.cyclePhase,
+		CycleTicksRemaining:   c.cycleTicksRemaining,
+		CycleImpactBps:        c.cycleImpactBps,
 		EmployeeLimit:         c.employeeLimit,
 		EmployeeCount:         c.employeeCount,
 		RevenuePerTickMicros:  p.RevenuePerTickMicros,
@@ -2161,6 +2177,9 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		       b.narrative_arc,
 		       b.narrative_focus,
 		       b.narrative_pressure_bps,
+		       b.cycle_phase,
+		       b.cycle_ticks_remaining,
+		       b.cycle_impact_bps,
 		       b.strategy,
 		       b.marketing_level,
 		       b.rd_level,
@@ -2215,45 +2234,48 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		return err
 	}
 	defer rows.Close()
-	type businessCycle struct {
-		businessID        int64
-		userID            string
-		baseRevenue       int64
-		visibility        string
-		isListed          bool
-		primaryRegion     string
-		narrativeArc      string
-		narrativeFocus    string
-		narrativePressure int32
-		strategy          string
-		marketingLevel    int32
-		rdLevel           int32
-		automationLevel   int32
-		complianceLevel   int32
-		brandBps          int32
-		healthBps         int32
-		reserveMicros     int64
-		employeeRevenue   int64
-		employeeCount     int64
-		avgRiskBps        float64
-		opsCount          int64
-		engineerCount     int64
-		productCount      int64
-		salesCount        int64
-		growthCount       int64
-		financeCount      int64
-		legalCount        int64
-		designCount       int64
-		machineOutput     int64
-		machineUpkeep     int64
-		loanInterest      int64
+	type businessTickCycle struct {
+		businessID          int64
+		userID              string
+		baseRevenue         int64
+		visibility          string
+		isListed            bool
+		primaryRegion       string
+		narrativeArc        string
+		narrativeFocus      string
+		narrativePressure   int32
+		cyclePhase          string
+		cycleTicksRemaining int32
+		cycleImpactBps      int32
+		strategy            string
+		marketingLevel      int32
+		rdLevel             int32
+		automationLevel     int32
+		complianceLevel     int32
+		brandBps            int32
+		healthBps           int32
+		reserveMicros       int64
+		employeeRevenue     int64
+		employeeCount       int64
+		avgRiskBps          float64
+		opsCount            int64
+		engineerCount       int64
+		productCount        int64
+		salesCount          int64
+		growthCount         int64
+		financeCount        int64
+		legalCount          int64
+		designCount         int64
+		machineOutput       int64
+		machineUpkeep       int64
+		loanInterest        int64
 	}
-	cycles := make([]businessCycle, 0)
+	cycles := make([]businessTickCycle, 0)
 	for rows.Next() {
-		var c businessCycle
+		var c businessTickCycle
 		if err := rows.Scan(
 			&c.businessID, &c.userID, &c.baseRevenue,
-			&c.visibility, &c.isListed, &c.primaryRegion, &c.narrativeArc, &c.narrativeFocus, &c.narrativePressure, &c.strategy, &c.marketingLevel, &c.rdLevel, &c.automationLevel, &c.complianceLevel,
+			&c.visibility, &c.isListed, &c.primaryRegion, &c.narrativeArc, &c.narrativeFocus, &c.narrativePressure, &c.cyclePhase, &c.cycleTicksRemaining, &c.cycleImpactBps, &c.strategy, &c.marketingLevel, &c.rdLevel, &c.automationLevel, &c.complianceLevel,
 			&c.brandBps, &c.healthBps, &c.reserveMicros,
 			&c.employeeRevenue, &c.employeeCount, &c.avgRiskBps,
 			&c.opsCount, &c.engineerCount, &c.productCount, &c.salesCount, &c.growthCount, &c.financeCount, &c.legalCount, &c.designCount,
@@ -2292,6 +2314,17 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 			AutomationLevel: c.automationLevel,
 			ComplianceLevel: c.complianceLevel,
 		})
+		cycleMessage := ""
+		if c.cycleTicksRemaining <= 0 {
+			c.cyclePhase, c.cycleTicksRemaining, c.cycleImpactBps, cycleMessage = rollBusinessCycle(businessCycle{
+				narrativeArc:      c.narrativeArc,
+				narrativeFocus:    c.narrativeFocus,
+				narrativePressure: c.narrativePressure,
+				primaryRegion:     c.primaryRegion,
+				strategy:          c.strategy,
+				avgRiskBps:        c.avgRiskBps,
+			}, world, nextFloat())
+		}
 
 		autoBoost := 1.0 + float64(c.automationLevel)*0.03
 		marketingBoost := 1.0 + float64(c.marketingLevel)*0.02
@@ -2307,9 +2340,13 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		machineUpkeep := int64(math.Round(float64(c.machineUpkeep) * (1 - upkeepCut) * team.MachineUpkeepFactor))
 		employeeSalary := employeeSalaryCostMicros(c.employeeCount, c.avgRiskBps, c.marketingLevel, c.rdLevel, c.automationLevel, c.complianceLevel)
 		maintenanceCost := businessMaintenanceCostMicros(c.employeeCount, 0, c.reserveMicros, c.automationLevel, c.complianceLevel)
+		costMultiplier := businessCycleCostMultiplier(businessCycle{cyclePhase: c.cyclePhase, cycleImpactBps: c.cycleImpactBps})
+		employeeSalary = int64(math.Round(float64(employeeSalary) * costMultiplier))
+		maintenanceCost = int64(math.Round(float64(maintenanceCost) * costMultiplier))
 
 		gross := c.baseRevenue + employeeRevenue + machineOutput - machineUpkeep
 		gross = int64(math.Round(float64(gross) * marketingBoost * rdBoost * brandBoost * healthBoost * team.RevenueMultiplier))
+		gross = int64(math.Round(float64(gross) * businessCycleRevenueMultiplier(businessCycle{cyclePhase: c.cyclePhase, cycleImpactBps: c.cycleImpactBps})))
 		gross = int64(math.Round(float64(gross) * (1 + regionTrend(world, c.primaryRegion)*0.35)))
 		gross = int64(math.Round(float64(gross) * (1 + policyDrift(world.PolicyFocus, businessPolicySubject(c.narrativeFocus))*0.45)))
 		gross = int64(math.Round(float64(gross) * (1 + float64(c.narrativePressure)/30000.0)))
@@ -2427,6 +2464,24 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 			`, profitable, c.businessID, seasonID); err != nil {
 				return err
 			}
+		}
+		nextCycleTicks := c.cycleTicksRemaining - 1
+		if nextCycleTicks < 0 {
+			nextCycleTicks = 0
+		}
+		if eventTag == "" && cycleMessage != "" {
+			eventTag = cycleMessage
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE game.businesses
+			SET cycle_phase = $1,
+			    cycle_ticks_remaining = $2,
+			    cycle_impact_bps = $3,
+			    last_event = CASE WHEN $4 <> '' THEN $4 ELSE last_event END,
+			    updated_at = now()
+			WHERE id = $5 AND season_id = $6
+		`, c.cyclePhase, nextCycleTicks, c.cycleImpactBps, eventTag, c.businessID, seasonID); err != nil {
+			return err
 		}
 
 		if c.strategy == "aggressive" && nextFloat() < (0.025+riskFactor*0.04) {

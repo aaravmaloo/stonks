@@ -41,6 +41,9 @@ type BusinessView struct {
 	NarrativeArc          string `json:"narrative_arc"`
 	NarrativeFocus        string `json:"narrative_focus"`
 	NarrativePressureBps  int32  `json:"narrative_pressure_bps"`
+	CyclePhase            string `json:"cycle_phase"`
+	CycleTicksRemaining   int32  `json:"cycle_ticks_remaining"`
+	CycleImpactBps        int32  `json:"cycle_impact_bps"`
 	EmployeeLimit         int64  `json:"employee_limit"`
 	EmployeeCount         int64  `json:"employee_count"`
 	RevenuePerTickMicros  int64  `json:"revenue_per_tick_micros"`
@@ -272,6 +275,30 @@ type WalletTransferInput struct {
 	RecipientUsername string
 	AmountMicros      int64
 	IdempotencyKey    string
+}
+
+type RushPlayInput struct {
+	UserID         string
+	SeasonID       int64
+	Mode           string
+	AmountMicros   int64
+	IdempotencyKey string
+}
+
+type RushStatus struct {
+	CurrentStreak         int32  `json:"current_streak"`
+	BestStreak            int32  `json:"best_streak"`
+	RoundCount            int32  `json:"round_count"`
+	WinCount              int32  `json:"win_count"`
+	WinRateBps            int32  `json:"win_rate_bps"`
+	VaultPoints           int32  `json:"vault_points"`
+	PointsToNextVault     int32  `json:"points_to_next_vault"`
+	VaultLevel            int32  `json:"vault_level"`
+	LastMode              string `json:"last_mode"`
+	LastMultiplierBps     int32  `json:"last_multiplier_bps"`
+	LastPayoutMicros      int64  `json:"last_payout_micros"`
+	LastVaultRewardMicros int64  `json:"last_vault_reward_micros"`
+	WorldMomentumBps      int32  `json:"world_momentum_bps"`
 }
 
 type LeaderboardRow struct {

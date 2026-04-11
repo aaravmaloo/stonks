@@ -33,6 +33,11 @@ type DiscordBotConfig struct {
 	GuildID     string
 }
 
+type WhatsAppBotConfig struct {
+	DatabaseURL string
+	APIBaseURL  string
+}
+
 func LoadAPIFromEnv() (APIConfig, error) {
 	addr := os.Getenv("PORT")
 	if addr != "" {
@@ -89,6 +94,20 @@ func LoadDiscordBotFromEnv() (DiscordBotConfig, error) {
 	}
 	if cfg.BotToken == "" {
 		return cfg, fmt.Errorf("DISCORD_BOT_TOKEN is required")
+	}
+	return cfg, nil
+}
+
+func LoadWhatsAppBotFromEnv() (WhatsAppBotConfig, error) {
+	cfg := WhatsAppBotConfig{
+		DatabaseURL: strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		APIBaseURL:  normalizeCLIBaseURL(envDefault("STK_API_BASE_URL", "https://stanks-api.fxtun.dev")),
+	}
+	if cfg.DatabaseURL == "" {
+		return cfg, fmt.Errorf("DATABASE_URL is required")
+	}
+	if cfg.APIBaseURL == "" {
+		return cfg, fmt.Errorf("STK_API_BASE_URL is required")
 	}
 	return cfg, nil
 }

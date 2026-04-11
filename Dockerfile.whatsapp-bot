@@ -1,0 +1,15 @@
+FROM golang:1.24-alpine AS builder
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 go build -o /bin/stanks-whatsapp-bot ./cmd/stanks-whatsapp-bot
+
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates tzdata
+
+COPY --from=builder /bin/stanks-whatsapp-bot /bin/stanks-whatsapp-bot
+
+ENTRYPOINT ["/bin/stanks-whatsapp-bot"]

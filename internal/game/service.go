@@ -505,6 +505,47 @@ func max64(a, b int64) int64 {
 	return b
 }
 
+const (
+	maxBigintMicros = int64(9223372036854775807)
+	minBigintMicros = int64(-9223372036854775808)
+)
+
+func saturatingAddInt64(a, b int64) int64 {
+	if b > 0 && a > maxBigintMicros-b {
+		return maxBigintMicros
+	}
+	if b < 0 && a < minBigintMicros-b {
+		return minBigintMicros
+	}
+	return a + b
+}
+
+func saturatingSubInt64(a, b int64) int64 {
+	if b > 0 && a < minBigintMicros+b {
+		return minBigintMicros
+	}
+	if b < 0 && a > maxBigintMicros+b {
+		return maxBigintMicros
+	}
+	return a - b
+}
+
+func addWalletDeltaTx(ctx context.Context, tx pgx.Tx, seasonID int64, userID string, delta int64) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE game.wallets
+		SET balance_micros = LEAST(
+		        $1::numeric,
+		        GREATEST(
+		            $2::numeric,
+		            balance_micros::numeric + $3::numeric
+		        )
+		    )::bigint,
+		    updated_at = now()
+		WHERE season_id = $4 AND user_id = $5
+	`, maxBigintMicros, minBigintMicros, delta, seasonID, userID)
+	return err
+}
+
 func effectiveEmployeeLimit(limit int64) int64 {
 	if limit <= 0 {
 		return BaseBusinessEmployeeLimit
@@ -2137,12 +2178,7 @@ func applyDebtInterestTx(ctx context.Context, tx pgx.Tx, seasonID int64, tickEve
 		if interest <= 0 {
 			continue
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE game.wallets
-			SET balance_micros = balance_micros - $1,
-			    updated_at = now()
-			WHERE season_id = $2 AND user_id = $3
-		`, interest, seasonID, n.userID); err != nil {
+		if err := addWalletDeltaTx(ctx, tx, seasonID, n.userID, -interest); err != nil {
 			return err
 		}
 		if err := appendLedgerEntries(ctx, tx, n.userID, seasonID, "debt_interest", interest, 0); err != nil {
@@ -2224,12 +2260,21 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 			WHERE bm.business_id = b.id AND bm.season_id = b.season_id
 		) m ON TRUE
 		LEFT JOIN LATERAL (
-			SELECT COALESCE(SUM(((bl.outstanding_micros::numeric * bl.interest_bps::numeric) / 10000)::bigint), 0) AS loan_interest
+			SELECT COALESCE(
+				LEAST(
+					$2::numeric,
+					GREATEST(
+						0::numeric,
+						SUM((bl.outstanding_micros::numeric * bl.interest_bps::numeric) / 10000.0)
+					)
+				)::bigint,
+				0
+			) AS loan_interest
 			FROM game.business_loans bl
 			WHERE bl.business_id = b.id AND bl.season_id = b.season_id AND bl.status = 'open'
 		) l ON TRUE
 		WHERE b.season_id = $1
-	`, seasonID)
+	`, seasonID, maxBigintMicros)
 	if err != nil {
 		return err
 	}
@@ -2530,9 +2575,16 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		if reserveYield > 0 {
 			if _, err := tx.Exec(ctx, `
 				UPDATE game.businesses
-				SET cash_reserve_micros = cash_reserve_micros + $1, updated_at = now()
-				WHERE id = $2 AND season_id = $3
-			`, reserveYield, c.businessID, seasonID); err != nil {
+				SET cash_reserve_micros = LEAST(
+				        $1::numeric,
+				        GREATEST(
+				            0::numeric,
+				            cash_reserve_micros::numeric + $2::numeric
+				        )
+				    )::bigint,
+				    updated_at = now()
+				WHERE id = $3 AND season_id = $4
+			`, maxBigintMicros, reserveYield, c.businessID, seasonID); err != nil {
 				return err
 			}
 		}
@@ -2546,9 +2598,16 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 			net += cover
 			if _, err := tx.Exec(ctx, `
 				UPDATE game.businesses
-				SET cash_reserve_micros = cash_reserve_micros - $1, updated_at = now()
-				WHERE id = $2 AND season_id = $3
-			`, cover, c.businessID, seasonID); err != nil {
+				SET cash_reserve_micros = LEAST(
+				        $1::numeric,
+				        GREATEST(
+				            0::numeric,
+				            cash_reserve_micros::numeric - $2::numeric
+				        )
+				    )::bigint,
+				    updated_at = now()
+				WHERE id = $3 AND season_id = $4
+			`, maxBigintMicros, cover, c.businessID, seasonID); err != nil {
 				return err
 			}
 		}
@@ -2557,7 +2616,7 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 			return err
 		}
 		if len(stakes) == 0 {
-			netByUser[c.userID] += net
+			netByUser[c.userID] = saturatingAddInt64(netByUser[c.userID], net)
 		} else {
 			remaining := net
 			for idx, stake := range stakes {
@@ -2567,7 +2626,7 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 				} else {
 					remaining -= share
 				}
-				netByUser[stake.UserID] += share
+				netByUser[stake.UserID] = saturatingAddInt64(netByUser[stake.UserID], share)
 			}
 		}
 	}
@@ -2576,12 +2635,7 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 		if delta == 0 {
 			continue
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE game.wallets
-			SET balance_micros = balance_micros + $1,
-			    updated_at = now()
-			WHERE season_id = $2 AND user_id = $3
-		`, delta, seasonID, userID); err != nil {
+		if err := addWalletDeltaTx(ctx, tx, seasonID, userID, delta); err != nil {
 			return err
 		}
 		if delta > 0 {
@@ -2600,12 +2654,15 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 	if _, err := tx.Exec(ctx, `
 		UPDATE game.business_loans
 		SET outstanding_micros = LEAST(
-		        9223372036854775807::bigint,
-		        outstanding_micros + (((outstanding_micros::numeric * interest_bps::numeric) / 10000)::bigint)
-		    ),
+		        $2::numeric,
+		        GREATEST(
+		            0::numeric,
+		            outstanding_micros::numeric + ((outstanding_micros::numeric * interest_bps::numeric) / 10000.0)
+		        )
+		    )::bigint,
 		    updated_at = now()
 		WHERE season_id = $1 AND status = 'open' AND outstanding_micros > 0
-	`, seasonID); err != nil {
+	`, seasonID, maxBigintMicros); err != nil {
 		return err
 	}
 	return nil
@@ -2613,11 +2670,18 @@ func applyBusinessRevenueTx(ctx context.Context, tx pgx.Tx, seasonID int64, next
 
 func applyBusinessLoanConsequencesTx(ctx context.Context, tx pgx.Tx, seasonID int64) error {
 	rows, err := tx.Query(ctx, `
-		SELECT business_id, owner_user_id, COALESCE(SUM(outstanding_micros), 0) AS outstanding
+		SELECT business_id, owner_user_id,
+		       COALESCE(
+		           LEAST(
+		               $2::numeric,
+		               GREATEST(0::numeric, SUM(outstanding_micros::numeric))
+		           )::bigint,
+		           0
+		       ) AS outstanding
 		FROM game.business_loans
 		WHERE season_id = $1 AND status = 'open'
 		GROUP BY business_id, owner_user_id
-	`, seasonID)
+	`, seasonID, maxBigintMicros)
 	if err != nil {
 		return err
 	}
@@ -2727,11 +2791,7 @@ func applyBusinessLoanConsequencesTx(ctx context.Context, tx pgx.Tx, seasonID in
 		if lateFee < minLate {
 			lateFee = minLate
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE game.wallets
-			SET balance_micros = balance_micros - $1, updated_at = now()
-			WHERE season_id = $2 AND user_id = $3
-		`, lateFee, seasonID, it.userID); err != nil {
+		if err := addWalletDeltaTx(ctx, tx, seasonID, it.userID, -lateFee); err != nil {
 			return err
 		}
 		if err := appendLedgerEntries(ctx, tx, it.userID, seasonID, "business_loan_late_fee", lateFee, 0); err != nil {
@@ -2796,17 +2856,23 @@ func updateSeasonPeakNetWorthTx(ctx context.Context, tx pgx.Tx, seasonID int64) 
 		UPDATE game.wallets w
 		SET peak_net_worth_micros = GREATEST(
 		        w.peak_net_worth_micros,
-		        w.balance_micros + COALESCE((
-		            SELECT SUM(((p.quantity_units::numeric * s.current_price_micros::numeric) / $2::numeric)::bigint)
-		            FROM game.positions p
-		            JOIN game.stocks s ON s.id = p.stock_id
-		            WHERE p.user_id = w.user_id
-		              AND p.season_id = w.season_id
-		        ), 0)
+		        LEAST(
+		            $2::numeric,
+		            GREATEST(
+		                $3::numeric,
+		                w.balance_micros::numeric + COALESCE((
+		                    SELECT SUM((p.quantity_units::numeric * s.current_price_micros::numeric) / $4::numeric)
+		                    FROM game.positions p
+		                    JOIN game.stocks s ON s.id = p.stock_id
+		                    WHERE p.user_id = w.user_id
+		                      AND p.season_id = w.season_id
+		                ), 0::numeric)
+		            )
+		        )::bigint
 		    ),
 		    updated_at = now()
 		WHERE w.season_id = $1
-	`, seasonID, ShareScale)
+	`, seasonID, maxBigintMicros, minBigintMicros, ShareScale)
 	return err
 }
 
@@ -3146,14 +3212,23 @@ func netWorthTx(ctx context.Context, tx pgx.Tx, userID string, seasonID int64) (
 	}
 	var holdings int64
 	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(SUM(((p.quantity_units::numeric * s.current_price_micros::numeric) / $3::numeric)::bigint), 0)
+		SELECT COALESCE(
+			LEAST(
+				$4::numeric,
+				GREATEST(
+					$5::numeric,
+					SUM((p.quantity_units::numeric * s.current_price_micros::numeric) / $3::numeric)
+				)
+			)::bigint,
+			0
+		)
 		FROM game.positions p
 		JOIN game.stocks s ON s.id = p.stock_id
 		WHERE p.user_id = $1 AND p.season_id = $2
-	`, userID, seasonID, ShareScale).Scan(&holdings); err != nil {
+	`, userID, seasonID, ShareScale, maxBigintMicros, minBigintMicros).Scan(&holdings); err != nil {
 		return 0, err
 	}
-	return balance + holdings, nil
+	return saturatingAddInt64(balance, holdings), nil
 }
 
 func notionalMicros(priceMicros, qtyUnits int64) (int64, error) {

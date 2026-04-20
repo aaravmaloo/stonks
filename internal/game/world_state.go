@@ -419,8 +419,26 @@ func (s *Service) applyPlayerProgressionTx(ctx context.Context, tx pgx.Tx, seaso
 	rows, err := tx.Query(ctx, `
 		WITH holdings AS (
 			SELECT p.user_id,
-			       COALESCE(SUM(((p.quantity_units::numeric * s.current_price_micros::numeric) / $2::numeric)::bigint), 0) AS holdings_micros,
-			       COALESCE(MAX(((p.quantity_units::numeric * s.current_price_micros::numeric) / $2::numeric)::bigint), 0) AS max_position_micros
+			       COALESCE(
+			           LEAST(
+			               $3::numeric,
+			               GREATEST(
+			                   $4::numeric,
+			                   SUM((p.quantity_units::numeric * s.current_price_micros::numeric) / $2::numeric)
+			               )
+			           )::bigint,
+			           0
+			       ) AS holdings_micros,
+			       COALESCE(
+			           LEAST(
+			               $3::numeric,
+			               GREATEST(
+			                   $4::numeric,
+			                   MAX((p.quantity_units::numeric * s.current_price_micros::numeric) / $2::numeric)
+			               )
+			           )::bigint,
+			           0
+			       ) AS max_position_micros
 			FROM game.positions p
 			JOIN game.stocks s ON s.id = p.stock_id
 			WHERE p.season_id = $1
@@ -430,7 +448,13 @@ func (s *Service) applyPlayerProgressionTx(ctx context.Context, tx pgx.Tx, seaso
 			SELECT b.owner_user_id AS user_id,
 			       COALESCE(SUM(CASE WHEN b.strategy = 'aggressive' THEN 1 ELSE 0 END), 0) AS aggressive_count,
 			       COALESCE(SUM(CASE WHEN b.is_listed THEN 1 ELSE 0 END), 0) AS listed_count,
-			       COALESCE(SUM(bl.outstanding_micros), 0) AS loan_micros
+			       COALESCE(
+			           LEAST(
+			               $3::numeric,
+			               GREATEST(0::numeric, SUM(bl.outstanding_micros::numeric))
+			           )::bigint,
+			           0
+			       ) AS loan_micros
 			FROM game.businesses b
 			LEFT JOIN game.business_loans bl
 			  ON bl.business_id = b.id AND bl.season_id = b.season_id AND bl.status = 'open'
@@ -455,7 +479,7 @@ func (s *Service) applyPlayerProgressionTx(ctx context.Context, tx pgx.Tx, seaso
 		LEFT JOIN biz b ON b.user_id = w.user_id
 		WHERE w.season_id = $1
 		FOR UPDATE OF w, pp
-	`, seasonID, ShareScale)
+	`, seasonID, ShareScale, maxBigintMicros, minBigintMicros)
 	if err != nil {
 		return err
 	}
@@ -488,16 +512,18 @@ func (s *Service) applyPlayerProgressionTx(ctx context.Context, tx pgx.Tx, seaso
 	}
 
 	for _, it := range items {
-		netWorth := it.balanceMicros + it.holdingsMicros
+		netWorth := saturatingAddInt64(it.balanceMicros, it.holdingsMicros)
 		if netWorth <= 0 {
 			netWorth = 1
 		}
 		riskScore := int32(0)
 		if it.holdingsMicros > 0 {
-			riskScore += clampBps(int32((it.maxPositionMicros*5000)/max64(it.holdingsMicros, 1)), 0, 5000)
+			shareRisk := float64(it.maxPositionMicros) * 5000.0 / float64(max64(it.holdingsMicros, 1))
+			riskScore += clampBps(int32(math.Round(shareRisk)), 0, 5000)
 		}
 		if it.loanMicros > 0 {
-			riskScore += clampBps(int32((it.loanMicros*3500)/max64(netWorth, 1)), 0, 3500)
+			loanRisk := float64(it.loanMicros) * 3500.0 / float64(max64(netWorth, 1))
+			riskScore += clampBps(int32(math.Round(loanRisk)), 0, 3500)
 		}
 		riskScore += clampBps(int32(it.aggressiveCount*700), 0, 2200)
 		riskScore += clampBps(int32(it.listedCount*180), 0, 800)
@@ -508,7 +534,7 @@ func (s *Service) applyPlayerProgressionTx(ctx context.Context, tx pgx.Tx, seaso
 
 		delta := int64(0)
 		if it.lastNetWorthMicros > 0 {
-			delta = netWorth - it.lastNetWorthMicros
+			delta = saturatingSubInt64(netWorth, it.lastNetWorthMicros)
 		}
 
 		currentStreak := it.currentStreak
@@ -553,13 +579,8 @@ func (s *Service) applyPlayerProgressionTx(ctx context.Context, tx pgx.Tx, seaso
 			riskPayout = -int64(math.Round(float64(-delta) * float64(riskScore) * float64(-world.RiskRewardBiasBps) / 100000000.0))
 		}
 		if riskPayout != 0 || streakReward != 0 {
-			total := riskPayout + streakReward
-			if _, err := tx.Exec(ctx, `
-				UPDATE game.wallets
-				SET balance_micros = balance_micros + $1,
-				    updated_at = now()
-				WHERE user_id = $2 AND season_id = $3
-			`, total, it.userID, seasonID); err != nil {
+			total := saturatingAddInt64(riskPayout, streakReward)
+			if err := addWalletDeltaTx(ctx, tx, seasonID, it.userID, total); err != nil {
 				return err
 			}
 			if err := appendWalletDeltaEntry(ctx, tx, it.userID, seasonID, total, "progression_payout", map[string]any{
@@ -570,7 +591,7 @@ func (s *Service) applyPlayerProgressionTx(ctx context.Context, tx pgx.Tx, seaso
 			}
 		}
 
-		nextNetWorth := netWorth + riskPayout + streakReward
+		nextNetWorth := saturatingAddInt64(saturatingAddInt64(netWorth, riskPayout), streakReward)
 		if _, err := tx.Exec(ctx, `
 			UPDATE game.player_progress
 			SET reputation_score = $1,

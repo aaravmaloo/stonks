@@ -48,6 +48,13 @@ func TestNotionalMicros(t *testing.T) {
 	}
 }
 
+func TestNotionalMicrosClamped(t *testing.T) {
+	got := notionalMicrosClamped(maxBigintMicros, maxBigintMicros)
+	if got != maxBigintMicros {
+		t.Fatalf("got %d want %d", got, maxBigintMicros)
+	}
+}
+
 func TestValidateEntityName(t *testing.T) {
 	if err := validateEntityName("Acme Labs"); err != nil {
 		t.Fatalf("expected valid entity name: %v", err)

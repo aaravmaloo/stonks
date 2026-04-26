@@ -587,16 +587,10 @@ func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) 
 		if err := rows.Scan(&pos.Symbol, &pos.DisplayName, &pos.QuantityUnits, &pos.AvgPriceMicros, &pos.CurrentPriceMicros); err != nil {
 			return out, err
 		}
-		marketValue, err := notionalMicros(pos.CurrentPriceMicros, pos.QuantityUnits)
-		if err != nil {
-			return out, err
-		}
-		costValue, err := notionalMicros(pos.AvgPriceMicros, pos.QuantityUnits)
-		if err != nil {
-			return out, err
-		}
-		pos.UnrealizedMicros = marketValue - costValue
-		holdings += marketValue
+		marketValue := notionalMicrosClamped(pos.CurrentPriceMicros, pos.QuantityUnits)
+		costValue := notionalMicrosClamped(pos.AvgPriceMicros, pos.QuantityUnits)
+		pos.UnrealizedMicros = saturatingSubInt64(marketValue, costValue)
+		holdings = saturatingAddInt64(holdings, marketValue)
 		out.Positions = append(out.Positions, pos)
 	}
 	if err := rows.Err(); err != nil {
@@ -668,9 +662,12 @@ func (s *Service) Dashboard(ctx context.Context, userID string, seasonID int64) 
 	}
 	stakeHoldings := int64(0)
 	for _, stake := range out.Stakes {
-		stakeHoldings += stake.EstimatedValueMicros
+		stakeHoldings = saturatingAddInt64(stakeHoldings, stake.EstimatedValueMicros)
 	}
-	out.NetWorthMicros = out.BalanceMicros + holdings + fundHoldings + stakeHoldings
+	netWorth := saturatingAddInt64(out.BalanceMicros, holdings)
+	netWorth = saturatingAddInt64(netWorth, fundHoldings)
+	netWorth = saturatingAddInt64(netWorth, stakeHoldings)
+	out.NetWorthMicros = netWorth
 	out.Progression, err = s.playerProgress(ctx, userID, seasonID)
 	if err != nil {
 		return out, err
@@ -3240,6 +3237,20 @@ func notionalMicros(priceMicros, qtyUnits int64) (int64, error) {
 		return 0, fmt.Errorf("notional overflow")
 	}
 	return v.Int64(), nil
+}
+
+func notionalMicrosClamped(priceMicros, qtyUnits int64) int64 {
+	p := big.NewInt(priceMicros)
+	q := big.NewInt(qtyUnits)
+	v := new(big.Int).Mul(p, q)
+	v = v.Div(v, big.NewInt(ShareScale))
+	if !v.IsInt64() {
+		if v.Sign() >= 0 {
+			return maxBigintMicros
+		}
+		return minBigintMicros
+	}
+	return v.Int64()
 }
 
 func divideMicros(totalMicros, qtyUnits int64) (int64, error) {

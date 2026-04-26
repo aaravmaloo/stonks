@@ -1609,11 +1609,8 @@ func (s *Service) estimateFundHoldingsMicros(ctx context.Context, userID string,
 			return 0, err
 		}
 		nav := navs[strings.ToUpper(strings.TrimSpace(code))]
-		value, err := notionalMicros(nav, units)
-		if err != nil {
-			return 0, err
-		}
-		total += value
+		value := notionalMicrosClamped(nav, units)
+		total = saturatingAddInt64(total, value)
 	}
 	return total, rows.Err()
 }

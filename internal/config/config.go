@@ -75,14 +75,14 @@ func LoadAPIFromEnv() (APIConfig, error) {
 
 func LoadCLIFromEnv() CLIConfig {
 	return CLIConfig{
-		APIBaseURL: normalizeCLIBaseURL(envDefault("STK_API_BASE_URL", "https://stanks-api.fxtun.dev")),
+		APIBaseURL: normalizeCLIBaseURL(envDefault("STK_API_BASE_URL", "https://stonks.pikapp.in")),
 	}
 }
 
 func LoadDiscordBotFromEnv() (DiscordBotConfig, error) {
 	cfg := DiscordBotConfig{
 		DatabaseURL: strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		APIBaseURL:  normalizeCLIBaseURL(envDefault("STK_API_BASE_URL", "https://stanks-api.fxtun.dev")),
+		APIBaseURL:  normalizeCLIBaseURL(envDefault("STK_API_BASE_URL", "https://stonks.pikapp.in")),
 		BotToken:    strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")),
 		GuildID:     strings.TrimSpace(os.Getenv("DISCORD_GUILD_ID")),
 	}

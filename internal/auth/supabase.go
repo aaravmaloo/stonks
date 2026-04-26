@@ -30,8 +30,19 @@ type User struct {
 	Email string `json:"email"`
 }
 
+const authDBTimeout = 8 * time.Second
+
 func NewClient(db *pgxpool.Pool) *Client {
 	return &Client{db: db}
+}
+
+func withAuthDBTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if deadline, ok := ctx.Deadline(); ok {
+		if time.Until(deadline) <= authDBTimeout {
+			return context.WithCancel(ctx)
+		}
+	}
+	return context.WithTimeout(ctx, authDBTimeout)
 }
 
 func (c *Client) SignUp(ctx context.Context, email, password string) (Session, error) {
@@ -40,6 +51,8 @@ func (c *Client) SignUp(ctx context.Context, email, password string) (Session, e
 	if email == "" || password == "" {
 		return Session{}, fmt.Errorf("email and password are required")
 	}
+	dbCtx, cancel := withAuthDBTimeout(ctx)
+	defer cancel()
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -49,7 +62,7 @@ func (c *Client) SignUp(ctx context.Context, email, password string) (Session, e
 	// If game data was restored but auth isn't, reuse the existing user_id
 	// from `users.profiles` so wallet/business/positions still belong to this account.
 	userID := ""
-	if err := c.db.QueryRow(ctx, `
+	if err := c.db.QueryRow(dbCtx, `
 		SELECT user_id
 		FROM users.profiles
 		WHERE email = $1
@@ -63,7 +76,7 @@ func (c *Client) SignUp(ctx context.Context, email, password string) (Session, e
 	}
 	token := uuid.NewString()
 
-	_, err = c.db.Exec(ctx, `
+	_, err = c.db.Exec(dbCtx, `
 		INSERT INTO auth.users (id, email, password_hash, access_token, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, now(), now())
 	`, userID, email, string(passwordHash), token)
@@ -87,9 +100,11 @@ func (c *Client) Login(ctx context.Context, email, password string) (Session, er
 	if email == "" || password == "" {
 		return Session{}, fmt.Errorf("email and password are required")
 	}
+	dbCtx, cancel := withAuthDBTimeout(ctx)
+	defer cancel()
 
 	var userID, passwordHash string
-	err := c.db.QueryRow(ctx, `
+	err := c.db.QueryRow(dbCtx, `
 		SELECT id, password_hash
 		FROM auth.users
 		WHERE email = $1
@@ -105,7 +120,7 @@ func (c *Client) Login(ctx context.Context, email, password string) (Session, er
 	}
 
 	token := uuid.NewString()
-	if _, err := c.db.Exec(ctx, `
+	if _, err := c.db.Exec(dbCtx, `
 		UPDATE auth.users
 		SET access_token = $2, updated_at = now()
 		WHERE id = $1
@@ -128,10 +143,12 @@ func (c *Client) VerifyAccessToken(ctx context.Context, accessToken string) (Use
 	if accessToken == "" {
 		return User{}, fmt.Errorf("missing access token")
 	}
+	dbCtx, cancel := withAuthDBTimeout(ctx)
+	defer cancel()
 
 	var user User
 	var updatedAt time.Time
-	err := c.db.QueryRow(ctx, `
+	err := c.db.QueryRow(dbCtx, `
 		SELECT id, email, updated_at
 		FROM auth.users
 		WHERE access_token = $1

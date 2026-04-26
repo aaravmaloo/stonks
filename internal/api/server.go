@@ -166,6 +166,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 		user, err := s.auth.VerifyAccessToken(r.Context(), token)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				writeError(w, http.StatusServiceUnavailable, "auth backend timeout")
+				return
+			}
 			writeError(w, http.StatusUnauthorized, fmt.Sprintf("invalid token: %v", err))
 			return
 		}
@@ -222,6 +226,10 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := s.auth.SignUp(r.Context(), strings.TrimSpace(in.Email), strings.TrimSpace(in.Password))
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			writeError(w, http.StatusServiceUnavailable, "auth backend timeout")
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -245,7 +253,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := s.auth.Login(r.Context(), strings.TrimSpace(in.Email), strings.TrimSpace(in.Password))
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			writeError(w, http.StatusServiceUnavailable, "auth backend timeout")
+			return
+		}
+		if strings.Contains(strings.ToLower(err.Error()), "invalid credentials") {
+			writeError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if strings.TrimSpace(session.User.ID) == "" {
+		writeError(w, http.StatusInternalServerError, "auth login returned empty user id")
 		return
 	}
 	if err := s.game.EnsurePlayer(r.Context(), session.User.ID, session.User.Email, ""); err != nil {

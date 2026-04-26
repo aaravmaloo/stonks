@@ -418,5 +418,7 @@ func (c *Client) jsonRequest(ctx context.Context, method, path, accessToken stri
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	dec := json.NewDecoder(resp.Body)
+	dec.UseNumber()
+	return dec.Decode(out)
 }
